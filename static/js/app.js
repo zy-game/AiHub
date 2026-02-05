@@ -208,7 +208,12 @@ function renderTokensChart(hourlyData) {
 // Channels (Card)
 async function loadChannels() {
     const channels = await API.get('/api/channels');
-    document.getElementById('channels-grid').innerHTML = channels.map(c => `
+    document.getElementById('channels-grid').innerHTML = channels.map(c => {
+        const hasMappings = c.model_mapping && Object.keys(c.model_mapping).length > 0;
+        const mappingText = hasMappings ? Object.entries(c.model_mapping).slice(0, 2).map(([k,v]) => `${k}→${v}`).join(', ') : '';
+        const mappingCount = hasMappings ? Object.keys(c.model_mapping).length : 0;
+        
+        return `
         <div class="item-card">
             <div class="item-card-header">
                 <div>
@@ -226,6 +231,11 @@ async function loadChannels() {
                     <span class="item-card-label">Token数</span>
                     <span class="item-card-value">${formatTokens(c.total_tokens)}</span>
                 </div>
+                ${hasMappings ? `
+                <div class="item-card-row">
+                    <span class="item-card-label">模型映射</span>
+                    <span class="item-card-value" style="font-size: 11px;">${mappingText}${mappingCount > 2 ? ` +${mappingCount-2}` : ''}</span>
+                </div>` : ''}
                 ${c.type === 'kiro' && c.limit ? getProgressBar(c.usage||0, c.limit) : ''}
                 <div class="models-list">${c.models.slice(0,4).map(m=>`<span class="model-tag">${m}</span>`).join('')}${c.models.length>4?`<span class="model-tag">+${c.models.length-4}</span>`:''}</div>
             </div>
@@ -235,7 +245,8 @@ async function loadChannels() {
                 <button class="btn btn-xs btn-danger" onclick="deleteChannel(${c.id})">删除</button>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 async function refreshChannelUsage(id) {
@@ -258,6 +269,7 @@ function showChannelModal(c = null) {
     document.getElementById('channel-name').value = c?.name || '';
     document.getElementById('channel-type').value = c?.type || 'openai';
     document.getElementById('channel-models').value = c?.models?.join(', ') || '';
+    document.getElementById('channel-model-mapping').value = c?.model_mapping ? JSON.stringify(c.model_mapping, null, 2) : '';
     document.getElementById('channel-priority').value = c?.priority || 0;
     document.getElementById('channel-modal').classList.add('active');
 }
@@ -275,10 +287,24 @@ async function deleteChannel(id) {
 document.getElementById('channel-form').addEventListener('submit', async e => {
     e.preventDefault();
     const id = document.getElementById('channel-id').value;
+    
+    // Parse model mapping
+    let modelMapping = {};
+    const mappingText = document.getElementById('channel-model-mapping').value.trim();
+    if (mappingText) {
+        try {
+            modelMapping = JSON.parse(mappingText);
+        } catch (err) {
+            alert('模型映射JSON格式错误：' + err.message);
+            return;
+        }
+    }
+    
     const data = {
         name: document.getElementById('channel-name').value,
         type: document.getElementById('channel-type').value,
         models: document.getElementById('channel-models').value.split(',').map(s=>s.trim()).filter(Boolean),
+        model_mapping: modelMapping,
         priority: parseInt(document.getElementById('channel-priority').value) || 0
     };
     id ? await API.put(`/api/channels/${id}`, data) : await API.post('/api/channels', data);
