@@ -88,6 +88,7 @@
                 <h1>所有账号</h1>
                 <div class="btn-group">
                     <button class="btn btn-primary" onclick="showAccountModalWithChannel()">+ 添加账号</button>
+                    <button class="btn btn-primary" onclick="showImportModalWithChannel()">导入账号</button>
                     <button class="btn" onclick="refreshAllUsage()">刷新用量</button>
                 </div>
             </div>
@@ -144,6 +145,89 @@
             </div>
             <div style="margin-top: 16px;"><button class="btn" onclick="loadMoreLogs()">加载更多</button></div>
         </section>
+        
+        <!-- Channel Edit Page -->
+        <section id="page-channel-edit" class="page">
+            <div class="page-header">
+                <h1 id="channel-edit-title">编辑渠道</h1>
+                <div class="btn-group">
+                    <button class="btn" onclick="showChannelsPage()">返回</button>
+                    <button class="btn btn-primary" onclick="saveChannelEdit()">保存</button>
+                </div>
+            </div>
+            <div class="form-container">
+                <form id="channel-edit-form" onsubmit="event.preventDefault(); saveChannelEdit();">
+                    <input type="hidden" id="edit-channel-id">
+                    <div class="form-group">
+                        <label>名称</label>
+                        <input type="text" id="edit-channel-name" required>
+                    </div>
+                    <div class="form-group">
+                        <label>类型</label>
+                        <select id="edit-channel-type" required disabled>
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic (Claude)</option>
+                            <option value="google">Google (Gemini)</option>
+                            <option value="kiro">Kiro</option>
+                        </select>
+                        <small class="help-text">类型创建后不可修改</small>
+                    </div>
+                    <div class="form-group">
+                        <label>支持的模型</label>
+                        <div id="edit-channel-supported-models" class="supported-models-list">
+                            <small class="help-text">加载中...</small>
+                        </div>
+                        <small class="help-text">模型由Provider自动管理，无需手动配置</small>
+                    </div>
+                    <div class="form-group">
+                        <label>优先级</label>
+                        <input type="number" id="edit-channel-priority" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>权重</label>
+                        <input type="number" id="edit-channel-weight" value="1" min="1" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-channel-enabled">
+                            <span>启用渠道</span>
+                        </label>
+                    </div>
+                </form>
+            </div>
+        </section>
+        
+        <!-- Account Edit Page -->
+        <section id="page-account-edit" class="page">
+            <div class="page-header">
+                <h1 id="account-edit-title">编辑账号</h1>
+                <div class="btn-group">
+                    <button class="btn" onclick="backToAccountsList()">返回</button>
+                    <button class="btn btn-primary" onclick="saveAccountEdit()">保存</button>
+                </div>
+            </div>
+            <div class="form-container">
+                <form id="account-edit-form" onsubmit="event.preventDefault(); saveAccountEdit();">
+                    <input type="hidden" id="edit-account-id">
+                    <input type="hidden" id="edit-account-channel-id">
+                    <div class="form-group">
+                        <label>名称（可选）</label>
+                        <input type="text" id="edit-account-name">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <textarea id="edit-account-api-key" rows="5" required></textarea>
+                        <small class="help-text">Kiro类型请输入JSON格式的凭证</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-account-enabled">
+                            <span>启用账号</span>
+                        </label>
+                    </div>
+                </form>
+            </div>
+        </section>
     </main>
     
     <!-- Channel Modal -->
@@ -160,19 +244,11 @@
                     <label>类型</label>
                     <select id="channel-type" required>
                         <option value="openai">OpenAI</option>
-                        <option value="anthropic">Anthropic</option>
-                        <option value="google">Google</option>
+                        <option value="anthropic">Anthropic (Claude)</option>
+                        <option value="google">Google (Gemini)</option>
                         <option value="kiro">Kiro</option>
                     </select>
-                </div>
-                <div class="form-group">
-                    <label>模型列表（逗号分隔）</label>
-                    <input type="text" id="channel-models" required placeholder="gpt-4o, gpt-4o-mini">
-                </div>
-                <div class="form-group">
-                    <label>模型映射（JSON格式，可选）</label>
-                    <textarea id="channel-model-mapping" rows="4" placeholder='{"gpt-4": "gpt-4-turbo", "gpt-3.5-turbo": "gpt-3.5-turbo-0125"}'></textarea>
-                    <small class="help-text">将请求的模型映射到实际调用的模型，用于成本优化</small>
+                    <small class="help-text">支持的模型由Provider自动管理</small>
                 </div>
                 <div class="form-group">
                     <label>优先级（数值越大优先级越高）</label>
@@ -224,6 +300,11 @@
         <div class="modal-content">
             <h2>导入账号</h2>
             <form id="import-form">
+                <div class="form-group" id="import-channel-group" style="display:none;">
+                    <label>选择渠道</label>
+                    <select id="import-channel-select" required>
+                    </select>
+                </div>
                 <div id="import-standard" class="import-section">
                     <div class="form-group">
                         <label>API Keys（每行一个）</label>
@@ -297,26 +378,21 @@
                     <input type="text" id="token-name" placeholder="令牌名称" required>
                 </div>
                 <div class="form-group">
-                    <label style="display: flex; align-items: center;">
-                        <input type="checkbox" id="token-unlimited-quota" style="margin-right: 8px;">
-                        <span>无限额度</span>
-                    </label>
-                </div>
-                <div class="form-group" id="token-quota-group">
-                    <label>剩余配额</label>
-                    <input type="number" id="token-remain-quota" value="100000" min="0">
+                    <label>所属用户ID</label>
+                    <input type="number" id="token-user-id" value="0" min="0">
+                    <small class="help-text">令牌将使用该用户的配额（0表示系统令牌）</small>
                 </div>
                 <div class="form-group">
                     <label>过期时间（留空 = 永不过期）</label>
                     <input type="datetime-local" id="token-expired-time">
                 </div>
                 <div class="form-group">
-                    <label style="display: flex; align-items: center;">
-                        <input type="checkbox" id="token-model-limits-enabled" style="margin-right: 8px;">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="token-model-limits-enabled">
                         <span>启用模型限制</span>
                     </label>
                 </div>
-                <div class="form-group" id="token-models-group" style="display:none;">
+                <div class="form-group" id="token-model-limits-group" style="display:none;">
                     <label>允许的模型（逗号分隔）</label>
                     <input type="text" id="token-model-limits" placeholder="gpt-4,claude-3-opus,gemini-pro">
                     <small class="help-text">例如：gpt-4,gpt-4-turbo,claude-3-opus</small>
@@ -330,8 +406,8 @@
                     <input type="text" id="token-group" value="default" placeholder="default">
                 </div>
                 <div class="form-group">
-                    <label style="display: flex; align-items: center;">
-                        <input type="checkbox" id="token-cross-group-retry" style="margin-right: 8px;">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="token-cross-group-retry">
                         <span>启用跨分组重试</span>
                     </label>
                 </div>

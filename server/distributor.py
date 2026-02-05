@@ -62,8 +62,24 @@ async def distribute(request: web.Request, ctx: RequestContext) -> Channel:
     channel = await load_balancer.select_channel(model, strategy="weighted")
     
     if not channel:
+        # Provide more detailed error message
+        from models import get_all_channels
+        all_channels = await get_all_channels()
+        
+        # Check if any channel supports this model
+        supporting_channels = [c for c in all_channels if c.supports_model(model)]
+        
+        if not supporting_channels:
+            error_msg = f"No channel supports model: {model}"
+        else:
+            disabled_count = sum(1 for c in supporting_channels if not c.enabled)
+            if disabled_count == len(supporting_channels):
+                error_msg = f"All channels supporting model '{model}' are disabled. Please enable at least one channel."
+            else:
+                error_msg = f"No available channel for model: {model}. Channels may be disabled or have no healthy accounts."
+        
         raise web.HTTPServiceUnavailable(
-            text=json.dumps({"error": {"message": f"No available channel for model: {model}", "type": "model_not_found"}}),
+            text=json.dumps({"error": {"message": error_msg, "type": "model_not_found"}}),
             content_type="application/json"
         )
     

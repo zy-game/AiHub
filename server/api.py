@@ -22,12 +22,15 @@ async def api_list_channels(request: web.Request) -> web.Response:
         totals = await get_account_usage_totals(c.id)
         # Sum tokens from all accounts in this channel
         total_tokens = sum(a.total_tokens or 0 for a in accounts)
+        
+        # Check if provider supports usage refresh
+        provider = get_provider(c.type)
+        supports_refresh = provider.supports_usage_refresh() if provider else False
+        
         result.append({
             "id": c.id,
             "name": c.name,
             "type": c.type,
-            "models": c.models,
-            "model_mapping": c.model_mapping,
             "priority": c.priority,
             "weight": c.weight,
             "enabled": c.enabled,
@@ -35,7 +38,8 @@ async def api_list_channels(request: web.Request) -> web.Response:
             "enabled_account_count": sum(1 for a in accounts if a.enabled),
             "usage": totals["used"],
             "limit": totals["limit"],
-            "total_tokens": total_tokens
+            "total_tokens": total_tokens,
+            "supports_usage_refresh": supports_refresh
         })
     return web.json_response(result)
 
@@ -44,8 +48,6 @@ async def api_create_channel(request: web.Request) -> web.Response:
     id_ = await create_channel(
         name=data["name"],
         type_=data["type"],
-        models=data["models"],
-        model_mapping=data.get("model_mapping", {}),
         priority=data.get("priority", 0),
         weight=data.get("weight", 1)
     )
@@ -56,6 +58,28 @@ async def api_update_channel(request: web.Request) -> web.Response:
     data = await request.json()
     await update_channel(id_, **data)
     return web.json_response({"success": True})
+
+async def api_channel_models(request: web.Request) -> web.Response:
+    """Get supported models for a channel"""
+    id_ = int(request.match_info["id"])
+    
+    channel = await get_channel_by_id(id_)
+    if not channel:
+        return web.json_response({"error": "Channel not found"}, status=404)
+    
+    from providers import get_provider
+    provider = get_provider(channel.type)
+    if not provider:
+        return web.json_response({"error": "Provider not found"}, status=404)
+    
+    models = provider.get_supported_models()
+    
+    return web.json_response({
+        "channel_id": channel.id,
+        "channel_name": channel.name,
+        "channel_type": channel.type,
+        "supported_models": models
+    })
 
 async def api_delete_channel(request: web.Request) -> web.Response:
     id_ = int(request.match_info["id"])
@@ -368,17 +392,22 @@ async def api_refresh_account_usage(request: web.Request) -> web.Response:
     if not account:
         return web.json_response({"error": "Account not found"}, status=404)
     
+    # Get provider
     channel_type = account.get("channel_type")
-    if channel_type != "kiro":
-        return web.json_response({"error": "Usage refresh only supported for kiro channels"}, status=400)
-    
-    provider = get_provider("kiro")
+    provider = get_provider(channel_type)
     if not provider:
-        return web.json_response({"error": "Kiro provider not available"}, status=500)
+        return web.json_response({"error": f"Provider {channel_type} not available"}, status=500)
+    
+    # Check if provider supports usage refresh
+    if not provider.supports_usage_refresh():
+        return web.json_response({"error": f"Usage refresh not supported for {channel_type} channels"}, status=400)
     
     try:
-        usage_data = await provider.get_usage_limits(account["api_key"], account_id)
-        used, limit = provider.extract_kiro_points(usage_data)
+        result = await provider.refresh_usage(account["api_key"], account_id)
+        if result is None:
+            return web.json_response({"error": "Failed to refresh usage"}, status=500)
+        
+        used, limit = result
         await update_account(account_id, usage=used, **{"limit": limit})
         return web.json_response({
             "success": True,
@@ -397,20 +426,25 @@ async def api_refresh_channel_usage(request: web.Request) -> web.Response:
     if not channel:
         return web.json_response({"error": "Channel not found"}, status=404)
     
-    if channel.type != "kiro":
-        return web.json_response({"error": "Usage refresh only supported for kiro channels"}, status=400)
-    
-    provider = get_provider("kiro")
+    # Get provider
+    provider = get_provider(channel.type)
     if not provider:
-        return web.json_response({"error": "Kiro provider not available"}, status=500)
+        return web.json_response({"error": f"Provider {channel.type} not available"}, status=500)
+    
+    # Check if provider supports usage refresh
+    if not provider.supports_usage_refresh():
+        return web.json_response({"error": f"Usage refresh not supported for {channel.type} channels"}, status=400)
     
     accounts = await get_accounts_by_channel(channel_id)
     results = {"success": 0, "failed": 0, "accounts": []}
     
     for account in accounts:
         try:
-            usage_data = await provider.get_usage_limits(account.api_key, account.id)
-            used, limit = provider.extract_kiro_points(usage_data)
+            result = await provider.refresh_usage(account.api_key, account.id)
+            if result is None:
+                raise Exception("Provider returned None")
+            
+            used, limit = result
             await update_account(account.id, usage=used, **{"limit": limit})
             results["success"] += 1
             results["accounts"].append({
@@ -432,27 +466,33 @@ async def api_refresh_channel_usage(request: web.Request) -> web.Response:
     return web.json_response(results)
 
 async def api_refresh_all_usage(request: web.Request) -> web.Response:
-    """Refresh usage for all kiro channels"""
+    """Refresh usage for all channels that support it"""
     channels = await get_all_channels()
-    kiro_channels = [c for c in channels if c.type == "kiro"]
     
-    if not kiro_channels:
-        return web.json_response({"error": "No kiro channels found"}, status=404)
+    # Filter channels that support usage refresh
+    supported_channels = []
+    for channel in channels:
+        provider = get_provider(channel.type)
+        if provider and provider.supports_usage_refresh():
+            supported_channels.append(channel)
     
-    provider = get_provider("kiro")
-    if not provider:
-        return web.json_response({"error": "Kiro provider not available"}, status=500)
+    if not supported_channels:
+        return web.json_response({"error": "No channels support usage refresh"}, status=404)
     
     results = {"channels": [], "total_success": 0, "total_failed": 0}
     
-    for channel in kiro_channels:
-        channel_result = {"id": channel.id, "name": channel.name, "success": 0, "failed": 0}
+    for channel in supported_channels:
+        channel_result = {"id": channel.id, "name": channel.name, "type": channel.type, "success": 0, "failed": 0}
         accounts = await get_accounts_by_channel(channel.id)
+        provider = get_provider(channel.type)
         
         for account in accounts:
             try:
-                usage_data = await provider.get_usage_limits(account.api_key, account.id)
-                used, limit = provider.extract_kiro_points(usage_data)
+                result = await provider.refresh_usage(account.api_key, account.id)
+                if result is None:
+                    raise Exception("Provider returned None")
+                
+                used, limit = result
                 await update_account(account.id, usage=used, **{"limit": limit})
                 channel_result["success"] += 1
                 results["total_success"] += 1
@@ -483,9 +523,6 @@ async def api_list_tokens(request: web.Request) -> web.Response:
             "key": t.key,
             "name": t.name,
             "status": t.status,
-            "unlimited_quota": t.unlimited_quota,
-            "remain_quota": t.remain_quota,
-            "used_quota": t.used_quota,
             "created_time": t.created_time,
             "accessed_time": t.accessed_time,
             "expired_time": t.expired_time,
@@ -496,7 +533,10 @@ async def api_list_tokens(request: web.Request) -> web.Response:
             "input_tokens": t.input_tokens,
             "output_tokens": t.output_tokens,
             "total_tokens": t.total_tokens,
-            "request_count": t.request_count
+            "request_count": t.request_count,
+            "rpm_limit": t.rpm_limit,
+            "tpm_limit": t.tpm_limit,
+            "cross_group_retry": t.cross_group_retry
         })
     return web.json_response(result)
 
@@ -508,8 +548,6 @@ async def api_create_token(request: web.Request) -> web.Response:
     
     token_id, key = await create_token(
         name=data.get("name", ""),
-        unlimited_quota=data.get("unlimited_quota", False),
-        remain_quota=data.get("remain_quota", 0),
         expired_time=data.get("expired_time", -1),
         model_limits_enabled=data.get("model_limits_enabled", False),
         model_limits=data.get("model_limits", ""),

@@ -7,8 +7,27 @@ from utils.logger import logger
 class OpenAIProvider(BaseProvider):
     BASE_URL = "https://api.openai.com"
     
+    SUPPORTED_MODELS = [
+        "gpt-4", "gpt-4-turbo", "gpt-4-turbo-preview",
+        "gpt-4-0125-preview", "gpt-4-1106-preview",
+        "gpt-4-vision-preview", "gpt-4-32k",
+        "gpt-3.5-turbo", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106",
+        "gpt-3.5-turbo-16k",
+        "o1-preview", "o1-mini"
+    ]
+    
     def __init__(self):
         super().__init__("openai")
+    
+    def get_supported_models(self) -> list:
+        return self.SUPPORTED_MODELS
+    
+    def supports_model(self, model: str) -> bool:
+        # 支持精确匹配或前缀匹配
+        if model in self.SUPPORTED_MODELS:
+            return True
+        # 检查是否是某个模型的变体（如 gpt-4-0613）
+        return any(model.startswith(m) for m in self.SUPPORTED_MODELS)
     
     async def chat(self, api_key: str, model: str, data: dict):
         url = f"{self.BASE_URL}/v1/chat/completions"

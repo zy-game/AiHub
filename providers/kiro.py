@@ -41,18 +41,42 @@ class KiroProvider(BaseProvider):
     def __init__(self):
         super().__init__("kiro")
     
+    def get_supported_models(self) -> list:
+        """Return user-facing model names"""
+        return list(self.MODEL_MAPPING.keys())
+    
+    def supports_model(self, model: str) -> bool:
+        """Check if this provider supports the given model"""
+        return model in self.MODEL_MAPPING
+    
+    def get_mapped_model(self, model: str) -> str:
+        """Map user-facing model name to internal Kiro model ID"""
+        return self.MODEL_MAPPING.get(model, model)
+    
     def get_format(self) -> str:
         """Kiro uses Claude message format"""
         return "claude"
+    
+    def supports_usage_refresh(self) -> bool:
+        """Kiro supports usage refresh"""
+        return True
+    
+    async def refresh_usage(self, api_key: str, account_id: int):
+        """
+        Refresh usage for a Kiro account
+        
+        Returns:
+            Tuple of (used, limit)
+        """
+        usage_data = await self.get_usage_limits(api_key, account_id)
+        used, limit = self.extract_kiro_points(usage_data)
+        return (used, limit)
     
     def _get_base_url(self, region: str = None) -> str:
         return self.BASE_URL_TEMPLATE.format(region=region or self.DEFAULT_REGION)
     
     def _get_refresh_url(self, region: str = None) -> str:
         return self.REFRESH_URL_TEMPLATE.format(region=region or self.DEFAULT_REGION)
-    
-    def _get_kiro_model(self, model: str) -> str:
-        return self.MODEL_MAPPING.get(model, self.MODEL_MAPPING.get("claude-sonnet-4-5"))
     
     def _build_headers(self, access_token: str) -> dict:
         machine_id = uuid.uuid4().hex
@@ -243,7 +267,7 @@ class KiroProvider(BaseProvider):
     
     def _build_request(self, messages: list, model: str, system: str = None, tools: list = None, thinking: dict = None) -> dict:
         conversation_id = str(uuid.uuid4())
-        kiro_model = self._get_kiro_model(model)
+        kiro_model = self.get_mapped_model(model)
         system_prompt = get_content_text(system) if system else ""
         processed_messages = list(messages)
         if not processed_messages:

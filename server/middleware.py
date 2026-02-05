@@ -1,7 +1,7 @@
 import json
 import time
 from aiohttp import web
-from models import get_user_by_api_key, get_token_by_key, create_log, update_user_quota
+from models import get_user_by_api_key, get_token_by_key, get_user_by_id, create_log, update_user_quota
 from utils.logger import logger
 from utils.rate_limiter import rate_limiter
 from config import ADMIN_KEY
@@ -46,6 +46,15 @@ async def auth_middleware(request: web.Request, handler):
                 status=401
             )
         
+        # Check token owner's quota
+        token_owner = await get_user_by_id(token.user_id)
+        if token_owner:
+            if not token_owner.has_quota():
+                return web.json_response(
+                    {"error": {"message": "User quota exhausted", "type": "quota_exceeded"}},
+                    status=429
+                )
+        
         # Check IP whitelist
         client_ip = request.remote
         if not token.is_ip_allowed(client_ip):
@@ -86,25 +95,11 @@ async def auth_middleware(request: web.Request, handler):
         request["start_time"] = time.time()
         return await handler(request)
     
-    # Fallback to User authentication (legacy system)
-    user = await get_user_by_api_key(api_key)
-    if not user:
-        return web.json_response(
-            {"error": {"message": "Invalid API key", "type": "authentication_error"}},
-            status=401
-        )
-    
-    if not user.has_quota():
-        return web.json_response(
-            {"error": {"message": "Quota exceeded", "type": "quota_exceeded"}},
-            status=429
-        )
-    
-    request["user"] = user
-    request["token"] = None
-    request["start_time"] = time.time()
-    
-    return await handler(request)
+    # No valid token found
+    return web.json_response(
+        {"error": {"message": "Invalid API key", "type": "authentication_error"}},
+        status=401
+    )
 
 @web.middleware
 async def error_middleware(request: web.Request, handler):

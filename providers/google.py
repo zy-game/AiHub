@@ -7,8 +7,26 @@ from utils.logger import logger
 class GoogleProvider(BaseProvider):
     BASE_URL = "https://generativelanguage.googleapis.com"
     
+    SUPPORTED_MODELS = [
+        "gemini-pro",
+        "gemini-pro-vision",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-exp"
+    ]
+    
     def __init__(self):
         super().__init__("gemini")
+    
+    def get_supported_models(self) -> list:
+        return self.SUPPORTED_MODELS
+    
+    def supports_model(self, model: str) -> bool:
+        if model in self.SUPPORTED_MODELS:
+            return True
+        # 支持变体（如 gemini-1.5-pro-001）
+        return any(model.startswith(m) for m in self.SUPPORTED_MODELS)
     
     async def chat(self, api_key: str, model: str, data: dict):
         url = f"{self.BASE_URL}/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"

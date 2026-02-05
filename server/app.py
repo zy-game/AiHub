@@ -7,7 +7,7 @@ from server.routes import (
     handle_gemini, handle_models
 )
 from server.api import (
-    api_list_channels, api_create_channel, api_update_channel, api_delete_channel,
+    api_list_channels, api_create_channel, api_update_channel, api_delete_channel, api_channel_models,
     api_list_all_accounts, api_list_accounts, api_create_account, api_batch_import_accounts, api_update_account, api_delete_account, api_clear_accounts,
     api_list_users, api_create_user, api_update_user, api_delete_user,
     api_list_tokens, api_create_token, api_update_token, api_delete_token, api_token_stats, api_model_pricing,
@@ -51,6 +51,7 @@ def create_app() -> web.Application:
     app.router.add_post("/api/channels", api_create_channel)
     app.router.add_put("/api/channels/{id}", api_update_channel)
     app.router.add_delete("/api/channels/{id}", api_delete_channel)
+    app.router.add_get("/api/channels/{id}/models", api_channel_models)
     
     # Admin API routes - Accounts (per channel)
     app.router.add_get("/api/accounts", api_list_all_accounts)

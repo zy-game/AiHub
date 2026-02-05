@@ -209,9 +209,6 @@ function renderTokensChart(hourlyData) {
 async function loadChannels() {
     const channels = await API.get('/api/channels');
     document.getElementById('channels-grid').innerHTML = channels.map(c => {
-        const hasMappings = c.model_mapping && Object.keys(c.model_mapping).length > 0;
-        const mappingText = hasMappings ? Object.entries(c.model_mapping).slice(0, 2).map(([k,v]) => `${k}→${v}`).join(', ') : '';
-        const mappingCount = hasMappings ? Object.keys(c.model_mapping).length : 0;
         const successRate = c.total_requests > 0 ? ((1 - (c.failed_requests || 0) / c.total_requests) * 100).toFixed(1) : '100.0';
         
         // Health status indicator
@@ -251,7 +248,7 @@ async function loadChannels() {
             <div class="item-card-body">
                 <div class="item-card-row">
                     <span class="item-card-label">账号</span>
-                    <span class="item-card-value"><a href="#" onclick="showChannelAccountsPage(${c.id},'${c.name}');return false;">${c.enabled_account_count} / ${c.account_count}</a></span>
+                    <span class="item-card-value">${c.enabled_account_count} / ${c.account_count}</span>
                 </div>
                 <div class="item-card-row">
                     <span class="item-card-label">Token数</span>
@@ -266,16 +263,10 @@ async function loadChannels() {
                     <span class="item-card-label">平均响应</span>
                     <span class="item-card-value">${c.avg_response_time}ms</span>
                 </div>` : ''}
-                ${hasMappings ? `
-                <div class="item-card-row">
-                    <span class="item-card-label">模型映射</span>
-                    <span class="item-card-value" style="font-size: 11px;">${mappingText}${mappingCount > 2 ? ` +${mappingCount-2}` : ''}</span>
-                </div>` : ''}
                 ${c.type === 'kiro' && c.limit ? getProgressBar(c.usage||0, c.limit) : ''}
-                <div class="models-list">${c.models.slice(0,4).map(m=>`<span class="model-tag">${m}</span>`).join('')}${c.models.length>4?`<span class="model-tag">+${c.models.length-4}</span>`:''}</div>
             </div>
             <div class="item-card-footer">
-                ${c.type==='kiro'?`<button class="btn btn-xs" onclick="refreshChannelUsage(${c.id})">刷新</button>`:''}
+                ${c.supports_usage_refresh?`<button class="btn btn-xs" onclick="refreshChannelUsage(${c.id})">刷新</button>`:''}
                 <button class="btn btn-xs" id="health-check-btn-${c.id}" onclick="healthCheckChannel(${c.id})">健康检查</button>
                 <button class="btn btn-xs" onclick="editChannel(${c.id})">编辑</button>
                 <button class="btn btn-xs btn-danger" onclick="deleteChannel(${c.id})">删除</button>
@@ -355,8 +346,6 @@ function showChannelModal(c = null) {
     document.getElementById('channel-id').value = c?.id || '';
     document.getElementById('channel-name').value = c?.name || '';
     document.getElementById('channel-type').value = c?.type || 'openai';
-    document.getElementById('channel-models').value = c?.models?.join(', ') || '';
-    document.getElementById('channel-model-mapping').value = c?.model_mapping ? JSON.stringify(c.model_mapping, null, 2) : '';
     document.getElementById('channel-priority').value = c?.priority || 0;
     document.getElementById('channel-weight').value = c?.weight || 1;
     document.getElementById('channel-modal').classList.add('active');
@@ -365,7 +354,55 @@ function showChannelModal(c = null) {
 async function editChannel(id) {
     const channels = await API.get('/api/channels');
     const c = channels.find(x => x.id === id);
-    if (c) showChannelModal(c);
+    if (c) {
+        // Navigate to edit page
+        document.getElementById('channel-edit-title').textContent = `编辑渠道 - ${c.name}`;
+        document.getElementById('edit-channel-id').value = c.id;
+        document.getElementById('edit-channel-name').value = c.name;
+        document.getElementById('edit-channel-type').value = c.type;
+        document.getElementById('edit-channel-priority').value = c.priority || 0;
+        document.getElementById('edit-channel-weight').value = c.weight || 1;
+        document.getElementById('edit-channel-enabled').checked = c.enabled;
+        
+        // Load supported models
+        loadChannelSupportedModels(c.id);
+        
+        showPage('channel-edit');
+    }
+}
+
+async function loadChannelSupportedModels(channelId) {
+    const container = document.getElementById('edit-channel-supported-models');
+    try {
+        const data = await API.get(`/api/channels/${channelId}/models`);
+        if (data.supported_models && data.supported_models.length > 0) {
+            container.innerHTML = `<div class="model-tags">${data.supported_models.map(m => `<span class="model-tag">${m}</span>`).join('')}</div>`;
+        } else {
+            container.innerHTML = '<small class="help-text">无可用模型</small>';
+        }
+    } catch (err) {
+        container.innerHTML = '<small class="help-text text-error">加载失败</small>';
+    }
+}
+
+async function saveChannelEdit() {
+    const id = document.getElementById('edit-channel-id').value;
+    
+    const data = {
+        name: document.getElementById('edit-channel-name').value,
+        priority: parseInt(document.getElementById('edit-channel-priority').value) || 0,
+        weight: parseInt(document.getElementById('edit-channel-weight').value) || 1,
+        enabled: document.getElementById('edit-channel-enabled').checked ? 1 : 0
+    };
+    
+    try {
+        await API.put(`/api/channels/${id}`, data);
+        alert('保存成功');
+        showChannelsPage();
+        loadChannels();
+    } catch (err) {
+        alert('保存失败：' + err.message);
+    }
 }
 
 async function deleteChannel(id) {
@@ -376,23 +413,9 @@ document.getElementById('channel-form').addEventListener('submit', async e => {
     e.preventDefault();
     const id = document.getElementById('channel-id').value;
     
-    // Parse model mapping
-    let modelMapping = {};
-    const mappingText = document.getElementById('channel-model-mapping').value.trim();
-    if (mappingText) {
-        try {
-            modelMapping = JSON.parse(mappingText);
-        } catch (err) {
-            alert('模型映射JSON格式错误：' + err.message);
-            return;
-        }
-    }
-    
     const data = {
         name: document.getElementById('channel-name').value,
         type: document.getElementById('channel-type').value,
-        models: document.getElementById('channel-models').value.split(',').map(s=>s.trim()).filter(Boolean),
-        model_mapping: modelMapping,
         priority: parseInt(document.getElementById('channel-priority').value) || 0,
         weight: parseInt(document.getElementById('channel-weight').value) || 1
     };
@@ -406,9 +429,12 @@ async function showChannelAccountsPage(id, name) {
     currentChannelId = id;
     currentChannelName = name;
     const channels = await API.get('/api/channels');
-    currentChannelType = channels.find(c => c.id === id)?.type || 'openai';
+    const channel = channels.find(c => c.id === id);
+    currentChannelType = channel?.type || 'openai';
+    const supportsRefresh = channel?.supports_usage_refresh || false;
+    
     document.getElementById('accounts-channel-name').textContent = name;
-    document.getElementById('btn-refresh-channel').style.display = currentChannelType === 'kiro' ? '' : 'none';
+    document.getElementById('btn-refresh-channel').style.display = supportsRefresh ? '' : 'none';
     showPage('channel-accounts');
     loadAccounts();
 }
@@ -439,11 +465,54 @@ async function loadAccounts() {
             </div>
             <div class="item-card-footer">
                 ${currentChannelType==='kiro'?`<button class="btn btn-xs" onclick="refreshAccountUsage(${a.id})">刷新</button>`:''}
+                <button class="btn btn-xs" onclick="editAccount(${a.id})">编辑</button>
                 <button class="btn btn-xs" onclick="toggleAccount(${a.id},${a.enabled})">${a.enabled?'禁用':'启用'}</button>
                 <button class="btn btn-xs btn-danger" onclick="deleteAccount(${a.id})">删除</button>
             </div>
         </div>
     `).join('');
+}
+
+async function editAccount(id) {
+    const accounts = await API.get(`/api/channels/${currentChannelId}/accounts`);
+    const account = accounts.find(a => a.id === id);
+    if (!account) return;
+    
+    document.getElementById('account-edit-title').textContent = `编辑账号 - ${account.name || '账号 #' + account.id}`;
+    document.getElementById('edit-account-id').value = account.id;
+    document.getElementById('edit-account-channel-id').value = currentChannelId;
+    document.getElementById('edit-account-name').value = account.name || '';
+    document.getElementById('edit-account-api-key').value = account.api_key;
+    document.getElementById('edit-account-enabled').checked = account.enabled;
+    
+    showPage('account-edit');
+}
+
+async function saveAccountEdit() {
+    const id = document.getElementById('edit-account-id').value;
+    
+    const data = {
+        name: document.getElementById('edit-account-name').value,
+        api_key: document.getElementById('edit-account-api-key').value,
+        enabled: document.getElementById('edit-account-enabled').checked ? 1 : 0
+    };
+    
+    try {
+        await API.put(`/api/accounts/${id}`, data);
+        alert('保存成功');
+        backToAccountsList();
+        loadAccounts();
+    } catch (err) {
+        alert('保存失败：' + err.message);
+    }
+}
+
+function backToAccountsList() {
+    if (currentChannelId) {
+        showPage('channel-accounts');
+    } else {
+        showPage('accounts-all');
+    }
 }
 
 async function refreshAccountUsage(id) {
@@ -639,12 +708,53 @@ function loadMoreLogs() { loadLogs(true); }
 
 // Import
 function showImportModal() {
+    // Hide channel selector (already in channel context)
+    const selectGroup = document.getElementById('import-channel-group');
+    if (selectGroup) selectGroup.style.display = 'none';
+    
     document.getElementById('import-keys').value = '';
     const f = document.getElementById('import-file'); if(f) f.value = '';
     const j = document.getElementById('import-kiro-json'); if(j) j.value = '';
     document.getElementById('import-standard').style.display = currentChannelType === 'kiro' ? 'none' : 'block';
     document.getElementById('import-kiro').style.display = currentChannelType === 'kiro' ? 'block' : 'none';
     if (currentChannelType === 'kiro') switchImportTab('file');
+    document.getElementById('import-modal').classList.add('active');
+}
+
+async function showImportModalWithChannel() {
+    // Show channel selector in import modal
+    const channels = await API.get('/api/channels');
+    const selectGroup = document.getElementById('import-channel-group');
+    const select = document.getElementById('import-channel-select');
+    
+    if (select && selectGroup) {
+        select.innerHTML = channels.map(c => 
+            `<option value="${c.id}" data-type="${c.type}">${c.name} (${c.type})</option>`
+        ).join('');
+        selectGroup.style.display = 'block';
+        
+        // Update import type based on selected channel
+        select.onchange = function() {
+            const selectedOption = this.options[this.selectedIndex];
+            const channelType = selectedOption.getAttribute('data-type');
+            currentChannelType = channelType;
+            currentChannelId = parseInt(this.value);
+            document.getElementById('import-standard').style.display = channelType === 'kiro' ? 'none' : 'block';
+            document.getElementById('import-kiro').style.display = channelType === 'kiro' ? 'block' : 'none';
+            if (channelType === 'kiro') switchImportTab('file');
+        };
+        
+        // Trigger initial setup
+        if (channels.length > 0) {
+            currentChannelType = channels[0].type;
+            currentChannelId = channels[0].id;
+            select.onchange();
+        }
+    }
+    
+    document.getElementById('import-keys').value = '';
+    const f = document.getElementById('import-file'); if(f) f.value = '';
+    const j = document.getElementById('import-kiro-json'); if(j) j.value = '';
     document.getElementById('import-modal').classList.add('active');
 }
 
@@ -704,10 +814,9 @@ async function loadTokens() {
     
     const grid = document.getElementById('tokens-grid');
     grid.innerHTML = tokens.map(t => {
-        const statusText = {1: '启用', 2: '禁用', 3: '已用尽', 4: '已过期'}[t.status] || '未知';
-        const statusClass = {1: 'success', 2: 'warning', 3: 'error', 4: 'error'}[t.status] || '';
+        const statusText = {1: '启用', 2: '禁用', 4: '已过期'}[t.status] || '未知';
+        const statusClass = {1: 'success', 2: 'warning', 4: 'error'}[t.status] || '';
         const expiredText = t.expired_time === -1 ? '永不过期' : formatDate(t.expired_time * 1000);
-        const quotaText = t.unlimited_quota ? '无限' : `${t.remain_quota.toLocaleString()} / ${(t.remain_quota + t.used_quota).toLocaleString()}`;
         
         return `
             <div class="card">
@@ -720,12 +829,8 @@ async function loadTokens() {
                         <span class="label">Key:</span>
                         <span class="value" style="display: flex; align-items: center; gap: 8px;">
                             <code id="token-key-${t.id}">${t.key.substring(0, 20)}...${t.key.substring(t.key.length - 4)}</code>
-                            <button class="btn btn-sm" onclick="copyTokenKey('${t.key}', ${t.id})" title="复制完整Key">📋</button>
+                            <button class="btn btn-sm" onclick="copyTokenKey('${t.key}', ${t.id}, event)" title="复制完整Key">📋</button>
                         </span>
-                    </div>
-                    <div class="card-info">
-                        <span class="label">配额:</span>
-                        <span class="value">${quotaText}</span>
                     </div>
                     <div class="card-info">
                         <span class="label">过期时间:</span>
@@ -778,7 +883,7 @@ async function loadTokens() {
     }).join('');
 }
 
-function copyTokenKey(key, tokenId) {
+function copyTokenKey(key, tokenId, event) {
     navigator.clipboard.writeText(key).then(() => {
         const btn = event.target;
         const originalText = btn.textContent;
@@ -847,19 +952,13 @@ async function deleteToken(id, name) {
     loadTokens();
 }
 
-function toggleTokenQuotaField() {
-    const unlimited = document.getElementById('token-unlimited-quota').checked;
-    document.getElementById('token-quota-group').style.display = unlimited ? 'none' : 'block';
-}
-
-function toggleTokenModelsField() {
+function toggleTokenModelLimits() {
     const enabled = document.getElementById('token-model-limits-enabled').checked;
-    document.getElementById('token-models-group').style.display = enabled ? 'block' : 'none';
+    document.getElementById('token-model-limits-group').style.display = enabled ? 'block' : 'none';
 }
 
 // Token form event listeners
-document.getElementById('token-unlimited-quota').addEventListener('change', toggleTokenQuotaField);
-document.getElementById('token-model-limits-enabled').addEventListener('change', toggleTokenModelsField);
+document.getElementById('token-model-limits-enabled').addEventListener('change', toggleTokenModelLimits);
 
 document.getElementById('token-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -873,8 +972,7 @@ document.getElementById('token-form').addEventListener('submit', async e => {
     
     const data = {
         name: document.getElementById('token-name').value,
-        unlimited_quota: document.getElementById('token-unlimited-quota').checked,
-        remain_quota: parseInt(document.getElementById('token-remain-quota').value) || 0,
+        user_id: parseInt(document.getElementById('token-user-id').value) || 0,
         expired_time: expiredTime,
         model_limits_enabled: document.getElementById('token-model-limits-enabled').checked,
         model_limits: document.getElementById('token-model-limits').value.trim(),

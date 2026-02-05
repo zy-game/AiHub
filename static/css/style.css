@@ -397,6 +397,46 @@ h2 {
 .health-bad { color: #ef4444; }
 .health-unknown { color: #6b7280; }
 
+/* Form Container */
+.form-container {
+    max-width: 800px;
+    margin: 0 auto;
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    padding: 24px;
+}
+
+.form-container .form-group {
+    margin-bottom: 20px;
+}
+
+.form-container textarea {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+}
+
+/* Checkbox Label */
+.checkbox-label {
+    display: flex !important;
+    align-items: center;
+    cursor: pointer;
+    margin-bottom: 0 !important;
+}
+
+.checkbox-label input[type="checkbox"] {
+    margin: 0;
+    margin-right: 10px;
+    cursor: pointer;
+    width: auto !important;
+    flex-shrink: 0;
+}
+
+.checkbox-label span {
+    user-select: none;
+    flex: 1;
+}
+
 /* Buttons */
 .btn {
     display: inline-flex;
@@ -715,4 +755,29 @@ td a:hover {
 
 .chart-container canvas {
     max-height: 260px;
+}
+
+/* Model Tags */
+.supported-models-list {
+    margin-top: 8px;
+}
+
+.model-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.model-tag {
+    display: inline-block;
+    padding: 4px 12px;
+    background: var(--primary);
+    color: white;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.text-error {
+    color: #ef4444;
 }

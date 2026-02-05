@@ -5,7 +5,7 @@ from aiohttp import web
 from server.distributor import distribute, RequestContext
 from converters import get_converter
 from providers import get_provider
-from models import create_log, update_user_quota, get_all_channels, get_available_account, add_user_tokens, add_account_tokens, update_token_quota, add_token_usage, update_channel_stats
+from models import create_log, update_user_quota, get_all_channels, get_available_account, add_user_tokens, add_account_tokens, add_token_usage, update_channel_stats, get_user_by_id
 from utils.logger import logger
 from utils.text import get_content_text
 from utils.token_counter import count_tokens
@@ -60,8 +60,8 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
     target_format = provider.get_format()
     converted_request = input_converter.convert_request(ctx.body, target_format)
     
-    # Get mapped model name
-    mapped_model = channel.get_mapped_model(ctx.model)
+    # Get mapped model name from provider
+    mapped_model = provider.get_mapped_model(ctx.model)
     
     # Retry logic with cross-group support
     max_retries = 3
@@ -78,13 +78,13 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
                 # Try to find another channel with different group
                 channels = await get_all_channels()
                 for alt_channel in channels:
-                    if alt_channel.id != channel.id and alt_channel.enabled and ctx.model in alt_channel.models:
+                    if alt_channel.id != channel.id and alt_channel.enabled and alt_channel.supports_model(ctx.model):
                         alt_account = await get_available_account(alt_channel.id)
                         if alt_account:
                             channel = alt_channel
                             account = alt_account
-                            mapped_model = channel.get_mapped_model(ctx.model)
                             provider = get_provider(channel.type)
+                            mapped_model = provider.get_mapped_model(ctx.model)
                             target_format = provider.get_format()
                             converted_request = input_converter.convert_request(ctx.body, target_format)
                             logger.warning(f"Cross-group retry: switched to channel {channel.name}")
@@ -245,14 +245,15 @@ async def _handle_stream(request, ctx, channel, account, provider, input_convert
             cost_info = calculate_cost(ctx.model, input_tokens, total_tokens)
             quota_usage = cost_info["quota_usage"]
             
-            # Update token usage (new system)
+            # Update token usage statistics
             if ctx.token:
                 await add_token_usage(ctx.token.id, input_tokens, total_tokens)
-                # Update quota if not unlimited (use calculated quota_usage)
-                if not ctx.token.unlimited_quota:
-                    await update_token_quota(ctx.token.id, quota_usage)
+                # Get token owner and update their quota
+                token_owner = await get_user_by_id(ctx.token.user_id)
+                if token_owner and token_owner.quota != -1:
+                    await update_user_quota(token_owner.id, quota_usage)
             
-            # Update user tokens (legacy system)
+            # Update user tokens (legacy system - direct API key auth)
             if ctx.user:
                 await add_user_tokens(ctx.user.id, input_tokens, total_tokens)
                 # Update user quota with calculated usage

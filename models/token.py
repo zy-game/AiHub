@@ -13,10 +13,7 @@ class Token:
         self.user_id = row["user_id"]
         self.key = row["key"]
         self.name = row.get("name", "")
-        self.status = row["status"]  # 1:enabled 2:disabled 3:exhausted 4:expired
-        self.unlimited_quota = row["unlimited_quota"]
-        self.remain_quota = row.get("remain_quota", 0) or 0
-        self.used_quota = row.get("used_quota", 0) or 0
+        self.status = row["status"]  # 1:enabled 2:disabled 4:expired
         self.created_time = row["created_time"]
         self.accessed_time = row.get("accessed_time", 0) or 0
         self.expired_time = row["expired_time"]  # -1 means never expired
@@ -41,7 +38,6 @@ class Token:
         if self.status != 1:
             status_msg = {
                 2: "Token is disabled",
-                3: "Token quota exhausted",
                 4: "Token expired"
             }
             return False, status_msg.get(self.status, "Token is not available")
@@ -49,10 +45,6 @@ class Token:
         # Check expiration
         if self.expired_time != -1 and self.expired_time < int(time.time()):
             return False, "Token expired"
-        
-        # Check quota
-        if not self.unlimited_quota and self.remain_quota <= 0:
-            return False, "Token quota exhausted"
         
         return True, ""
     
@@ -112,8 +104,6 @@ async def get_all_tokens(user_id: int = None) -> List[Token]:
 
 async def create_token(
     name: str = "",
-    unlimited_quota: bool = False,
-    remain_quota: int = 0,
     expired_time: int = -1,
     model_limits_enabled: bool = False,
     model_limits: str = "",
@@ -131,12 +121,12 @@ async def create_token(
     
     cursor = await db.execute(
         """INSERT INTO tokens 
-           (user_id, key, name, status, unlimited_quota, remain_quota, 
-            created_time, expired_time, model_limits_enabled, model_limits, 
-            ip_whitelist, "group", cross_group_retry, rpm_limit, tpm_limit)
-           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, key, name, unlimited_quota, remain_quota, created_time, 
-         expired_time, model_limits_enabled, model_limits, ip_whitelist, group, 
+           (user_id, key, name, status, created_time, expired_time, 
+            model_limits_enabled, model_limits, ip_whitelist, "group", 
+            cross_group_retry, rpm_limit, tpm_limit)
+           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, key, name, created_time, expired_time, 
+         model_limits_enabled, model_limits, ip_whitelist, group, 
          cross_group_retry, rpm_limit, tpm_limit)
     )
     await db.commit()
@@ -173,18 +163,7 @@ async def delete_token(token_id: int) -> bool:
     return True
 
 
-async def update_token_quota(token_id: int, used: int):
-    """Update token quota usage"""
-    db = await get_db()
-    await db.execute(
-        """UPDATE tokens 
-           SET used_quota = used_quota + ?,
-               remain_quota = remain_quota - ?,
-               accessed_time = ?
-           WHERE id = ?""",
-        (used, used, int(time.time()), token_id)
-    )
-    await db.commit()
+
 
 
 async def add_token_usage(token_id: int, input_tokens: int, output_tokens: int):
@@ -217,15 +196,6 @@ async def check_and_update_token_status():
            AND expired_time != -1 
            AND expired_time < ?""",
         (current_time,)
-    )
-    
-    # Update exhausted tokens
-    await db.execute(
-        """UPDATE tokens 
-           SET status = 3 
-           WHERE status = 1 
-           AND unlimited_quota = 0 
-           AND remain_quota <= 0""",
     )
     
     await db.commit()

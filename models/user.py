@@ -28,6 +28,18 @@ async def get_user_by_api_key(api_key: str) -> Optional[User]:
             return User(dict(row))
     return None
 
+async def get_user_by_id(user_id: int) -> Optional[User]:
+    """Get user by ID"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT * FROM users WHERE id = ?",
+        (user_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            return User(dict(row))
+    return None
+
 async def get_all_users():
     db = await get_db()
     async with db.execute("SELECT * FROM users ORDER BY id DESC") as cursor:

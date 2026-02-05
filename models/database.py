@@ -19,41 +19,46 @@ async def close_db():
         _db = None
 
 async def init_tables(db: aiosqlite.Connection):
-    # Check if we need to migrate old schema (remove base_url column)
+    # Check if we need to migrate old schema
     async with db.execute("PRAGMA table_info(channels)") as cursor:
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
         
-        if "base_url" in column_names:
-            logger.info("Migrating database: removing base_url column from channels")
+        # Check if old schema with models/model_mapping exists
+        if "models" in column_names or "model_mapping" in column_names:
+            logger.info("Migrating database: removing models and model_mapping columns from channels")
             # SQLite doesn't support DROP COLUMN directly, need to recreate table
             await db.executescript("""
                 CREATE TABLE IF NOT EXISTS channels_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
                     type TEXT NOT NULL,
-                    models TEXT NOT NULL,
-                    model_mapping TEXT DEFAULT '{}',
                     priority INTEGER DEFAULT 0,
                     weight INTEGER DEFAULT 1,
                     enabled INTEGER DEFAULT 1,
+                    avg_response_time INTEGER DEFAULT 0,
+                    total_requests INTEGER DEFAULT 0,
+                    failed_requests INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                INSERT INTO channels_new (id, name, type, models, model_mapping, priority, weight, enabled, created_at)
-                    SELECT id, name, type, models, model_mapping, priority, weight, enabled, created_at FROM channels;
+                INSERT INTO channels_new (id, name, type, priority, weight, enabled, avg_response_time, total_requests, failed_requests, created_at)
+                    SELECT id, name, type, priority, weight, enabled, 
+                           COALESCE(avg_response_time, 0), 
+                           COALESCE(total_requests, 0), 
+                           COALESCE(failed_requests, 0), 
+                           created_at 
+                    FROM channels;
                 DROP TABLE channels;
                 ALTER TABLE channels_new RENAME TO channels;
             """)
             await db.commit()
-            logger.info("Database migration completed")
+            logger.info("Database migration completed: models and model_mapping removed")
     
     await db.executescript("""
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             type TEXT NOT NULL,
-            models TEXT NOT NULL,
-            model_mapping TEXT DEFAULT '{}',
             priority INTEGER DEFAULT 0,
             weight INTEGER DEFAULT 1,
             enabled INTEGER DEFAULT 1,
@@ -92,9 +97,6 @@ async def init_tables(db: aiosqlite.Connection):
             key TEXT UNIQUE NOT NULL,
             name TEXT DEFAULT '',
             status INTEGER DEFAULT 1,
-            unlimited_quota INTEGER DEFAULT 0,
-            remain_quota INTEGER DEFAULT 0,
-            used_quota INTEGER DEFAULT 0,
             created_time INTEGER NOT NULL,
             accessed_time INTEGER DEFAULT 0,
             expired_time INTEGER DEFAULT -1,
@@ -126,7 +128,6 @@ async def init_tables(db: aiosqlite.Connection):
         );
         
         CREATE INDEX IF NOT EXISTS idx_channels_enabled ON channels(enabled);
-        CREATE INDEX IF NOT EXISTS idx_channels_models ON channels(models);
         CREATE INDEX IF NOT EXISTS idx_accounts_channel ON accounts(channel_id, enabled);
         CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
         CREATE INDEX IF NOT EXISTS idx_tokens_key ON tokens(key);

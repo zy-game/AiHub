@@ -11,7 +11,7 @@ class HealthChecker:
     """Health checker for channels and accounts"""
     
     def __init__(self):
-        self.check_interval = 300  # 5 minutes
+        self.check_interval = 60  # 5 minutes
         self.timeout = 10  # 10 seconds
         self.running = False
     
@@ -87,20 +87,22 @@ class HealthChecker:
             logger.error(f"Unknown provider type: {channel.type}")
             return False
         
-        # Get a test model for this channel
-        test_model = channel.models[0] if channel.models else None
+        # Get a test model for this channel from provider
+        supported_models = provider.get_supported_models()
+        test_model = supported_models[0] if supported_models else None
         if not test_model:
             logger.warning(f"Channel {channel.name} has no models configured")
             return False
         
-        # Apply model mapping
-        mapped_model = channel.get_mapped_model(test_model)
+        # Apply model mapping from provider
+        mapped_model = provider.get_mapped_model(test_model)
         
         # Prepare test request
         test_request = {
             "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 5,
-            "stream": False
+            "stream": False,
+            "_account_id": account.id  # Pass account ID for token refresh
         }
         
         try:
