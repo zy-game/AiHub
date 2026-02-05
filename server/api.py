@@ -515,6 +515,8 @@ async def api_create_token(request: web.Request) -> web.Response:
         ip_whitelist=data.get("ip_whitelist", ""),
         group=data.get("group", "default"),
         cross_group_retry=data.get("cross_group_retry", False),
+        rpm_limit=data.get("rpm_limit", 0),
+        tpm_limit=data.get("tpm_limit", 0),
         user_id=data.get("user_id", 0)
     )
     
@@ -590,3 +592,23 @@ async def api_token_stats(request: web.Request) -> web.Response:
         "top_tokens": token_usage[:10],
         "all_tokens": token_usage
     })
+
+
+async def api_model_pricing(request: web.Request) -> web.Response:
+    """Get model pricing information"""
+    from utils.model_pricing import get_all_models, get_model_rate, MODEL_RATES
+    
+    model = request.query.get("model")
+    
+    if model:
+        # Get specific model rate
+        rate = get_model_rate(model)
+        return web.json_response({
+            "model": model,
+            "rate": rate
+        })
+    else:
+        # Get all models
+        return web.json_response({
+            "models": MODEL_RATES
+        })

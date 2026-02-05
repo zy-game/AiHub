@@ -620,6 +620,11 @@ async function loadTokens() {
                         <span class="label">分组:</span>
                         <span class="value">${t.group}</span>
                     </div>
+                    ${t.rpm_limit > 0 || t.tpm_limit > 0 ? `
+                    <div class="card-info">
+                        <span class="label">速率限制:</span>
+                        <span class="value">${t.rpm_limit > 0 ? `RPM: ${t.rpm_limit}` : ''}${t.rpm_limit > 0 && t.tpm_limit > 0 ? ' | ' : ''}${t.tpm_limit > 0 ? `TPM: ${t.tpm_limit.toLocaleString()}` : ''}</span>
+                    </div>` : ''}
                     ${t.model_limits_enabled ? `
                     <div class="card-info">
                         <span class="label">模型限制:</span>
@@ -681,6 +686,8 @@ async function showTokenModal() {
     document.getElementById('token-ip-whitelist').value = '';
     document.getElementById('token-group').value = 'default';
     document.getElementById('token-cross-group-retry').checked = false;
+    document.getElementById('token-rpm-limit').value = '0';
+    document.getElementById('token-tpm-limit').value = '0';
     
     toggleTokenQuotaField();
     toggleTokenModelsField();
@@ -710,6 +717,8 @@ async function editToken(id) {
     document.getElementById('token-ip-whitelist').value = token.ip_whitelist;
     document.getElementById('token-group').value = token.group;
     document.getElementById('token-cross-group-retry').checked = token.cross_group_retry || false;
+    document.getElementById('token-rpm-limit').value = token.rpm_limit || 0;
+    document.getElementById('token-tpm-limit').value = token.tpm_limit || 0;
     
     toggleTokenQuotaField();
     toggleTokenModelsField();
@@ -756,7 +765,9 @@ document.getElementById('token-form').addEventListener('submit', async e => {
         model_limits: document.getElementById('token-model-limits').value.trim(),
         ip_whitelist: document.getElementById('token-ip-whitelist').value.trim(),
         group: document.getElementById('token-group').value.trim() || 'default',
-        cross_group_retry: document.getElementById('token-cross-group-retry').checked
+        cross_group_retry: document.getElementById('token-cross-group-retry').checked,
+        rpm_limit: parseInt(document.getElementById('token-rpm-limit').value) || 0,
+        tpm_limit: parseInt(document.getElementById('token-tpm-limit').value) || 0
     };
     
     if (id) {

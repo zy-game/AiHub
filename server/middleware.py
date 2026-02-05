@@ -3,6 +3,7 @@ import time
 from aiohttp import web
 from models import get_user_by_api_key, get_token_by_key, create_log, update_user_quota
 from utils.logger import logger
+from utils.rate_limiter import rate_limiter
 from config import ADMIN_KEY
 
 @web.middleware
@@ -52,6 +53,33 @@ async def auth_middleware(request: web.Request, handler):
                 {"error": {"message": "IP not allowed", "type": "authentication_error"}},
                 status=403
             )
+        
+        # Check rate limits (estimate tokens from request body)
+        estimated_tokens = 0
+        try:
+            body = await request.json()
+            # Rough estimation: count characters in messages
+            messages = body.get("messages", [])
+            for msg in messages:
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    estimated_tokens += len(content) // 4  # Rough estimate
+        except:
+            estimated_tokens = 1000  # Default estimate if can't parse
+        
+        # Check token rate limits
+        if token.rpm_limit > 0 or token.tpm_limit > 0:
+            allowed, error_msg = await rate_limiter.check_token_limit(
+                token.id, 
+                token.rpm_limit, 
+                token.tpm_limit,
+                estimated_tokens
+            )
+            if not allowed:
+                return web.json_response(
+                    {"error": {"message": error_msg, "type": "rate_limit_exceeded"}},
+                    status=429
+                )
         
         request["token"] = token
         request["user"] = None  # Token-based auth doesn't use user

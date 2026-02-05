@@ -9,6 +9,7 @@ from models import create_log, update_user_quota, get_all_channels, get_availabl
 from utils.logger import logger
 from utils.text import get_content_text
 from utils.token_counter import count_tokens
+from utils.model_pricing import calculate_cost
 
 async def handle_chat_completions(request: web.Request) -> web.Response:
     """Handle OpenAI /v1/chat/completions"""
@@ -233,16 +234,23 @@ async def _handle_stream(request, ctx, channel, account, provider, input_convert
         
         # Update token statistics
         if input_tokens > 0 or total_tokens > 0:
+            # Calculate cost based on model pricing
+            cost_info = calculate_cost(ctx.model, input_tokens, total_tokens)
+            quota_usage = cost_info["quota_usage"]
+            
             # Update token usage (new system)
             if ctx.token:
                 await add_token_usage(ctx.token.id, input_tokens, total_tokens)
-                # Update quota if not unlimited
+                # Update quota if not unlimited (use calculated quota_usage)
                 if not ctx.token.unlimited_quota:
-                    await update_token_quota(ctx.token.id, input_tokens + total_tokens)
+                    await update_token_quota(ctx.token.id, quota_usage)
             
             # Update user tokens (legacy system)
             if ctx.user:
                 await add_user_tokens(ctx.user.id, input_tokens, total_tokens)
+                # Update user quota with calculated usage
+                if ctx.user.quota != -1:
+                    await update_user_quota(ctx.user.id, quota_usage)
             
             # Update account tokens
             await add_account_tokens(account.id, input_tokens, total_tokens)

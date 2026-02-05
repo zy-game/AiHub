@@ -10,7 +10,7 @@ from server.api import (
     api_list_channels, api_create_channel, api_update_channel, api_delete_channel,
     api_list_all_accounts, api_list_accounts, api_create_account, api_batch_import_accounts, api_update_account, api_delete_account, api_clear_accounts,
     api_list_users, api_create_user, api_update_user, api_delete_user,
-    api_list_tokens, api_create_token, api_update_token, api_delete_token, api_token_stats,
+    api_list_tokens, api_create_token, api_update_token, api_delete_token, api_token_stats, api_model_pricing,
     api_list_logs, api_get_stats,
     api_kiro_device_auth, api_kiro_device_token,
     api_refresh_account_usage, api_refresh_channel_usage, api_refresh_all_usage
@@ -72,6 +72,9 @@ def create_app() -> web.Application:
     app.router.add_put("/api/tokens/{id}", api_update_token)
     app.router.add_delete("/api/tokens/{id}", api_delete_token)
     app.router.add_get("/api/tokens/stats", api_token_stats)
+    
+    # Model pricing
+    app.router.add_get("/api/models/pricing", api_model_pricing)
     
     app.router.add_get("/api/logs", api_list_logs)
     app.router.add_get("/api/stats", api_get_stats)

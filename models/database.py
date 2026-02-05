@@ -100,6 +100,8 @@ async def init_tables(db: aiosqlite.Connection):
             ip_whitelist TEXT DEFAULT '',
             "group" TEXT DEFAULT 'default',
             cross_group_retry INTEGER DEFAULT 0,
+            rpm_limit INTEGER DEFAULT 0,
+            tpm_limit INTEGER DEFAULT 0,
             input_tokens INTEGER DEFAULT 0,
             output_tokens INTEGER DEFAULT 0,
             total_tokens INTEGER DEFAULT 0,
@@ -160,6 +162,10 @@ async def init_tables(db: aiosqlite.Connection):
         column_names = [col[1] for col in columns]
         if "cross_group_retry" not in column_names:
             await db.execute("ALTER TABLE tokens ADD COLUMN cross_group_retry INTEGER DEFAULT 0")
+        if "rpm_limit" not in column_names:
+            await db.execute("ALTER TABLE tokens ADD COLUMN rpm_limit INTEGER DEFAULT 0")
+        if "tpm_limit" not in column_names:
+            await db.execute("ALTER TABLE tokens ADD COLUMN tpm_limit INTEGER DEFAULT 0")
     
     await db.commit()
     logger.info("Database tables initialized")

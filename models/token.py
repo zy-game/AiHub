@@ -26,6 +26,10 @@ class Token:
         self.group = row.get("group", "default")
         self.cross_group_retry = row.get("cross_group_retry", 0) or 0
         
+        # Rate limiting
+        self.rpm_limit = row.get("rpm_limit", 0) or 0  # 0 = unlimited
+        self.tpm_limit = row.get("tpm_limit", 0) or 0  # 0 = unlimited
+        
         # Token statistics
         self.input_tokens = row.get("input_tokens", 0) or 0
         self.output_tokens = row.get("output_tokens", 0) or 0
@@ -116,6 +120,8 @@ async def create_token(
     ip_whitelist: str = "",
     group: str = "default",
     cross_group_retry: bool = False,
+    rpm_limit: int = 0,
+    tpm_limit: int = 0,
     user_id: int = 0
 ) -> tuple[int, str]:
     """Create a new token"""
@@ -127,10 +133,11 @@ async def create_token(
         """INSERT INTO tokens 
            (user_id, key, name, status, unlimited_quota, remain_quota, 
             created_time, expired_time, model_limits_enabled, model_limits, 
-            ip_whitelist, "group", cross_group_retry)
-           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ip_whitelist, "group", cross_group_retry, rpm_limit, tpm_limit)
+           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (user_id, key, name, unlimited_quota, remain_quota, created_time, 
-         expired_time, model_limits_enabled, model_limits, ip_whitelist, group, cross_group_retry)
+         expired_time, model_limits_enabled, model_limits, ip_whitelist, group, 
+         cross_group_retry, rpm_limit, tpm_limit)
     )
     await db.commit()
     return cursor.lastrowid, key
