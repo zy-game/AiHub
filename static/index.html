@@ -175,8 +175,14 @@
                     <small class="help-text">将请求的模型映射到实际调用的模型，用于成本优化</small>
                 </div>
                 <div class="form-group">
-                    <label>优先级</label>
+                    <label>优先级（数值越大优先级越高）</label>
                     <input type="number" id="channel-priority" value="0">
+                    <small class="help-text">优先级高的渠道会被优先选择</small>
+                </div>
+                <div class="form-group">
+                    <label>权重（1-100）</label>
+                    <input type="number" id="channel-weight" value="1" min="1" max="100">
+                    <small class="help-text">权重越高，被选中的概率越大</small>
                 </div>
                 <div class="form-actions">
                     <button type="button" class="btn" onclick="closeModal('channel-modal')">取消</button>

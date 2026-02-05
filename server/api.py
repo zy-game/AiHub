@@ -1,5 +1,6 @@
 import json
 import uuid
+import asyncio
 import aiohttp
 from datetime import datetime, timezone, timedelta
 from aiohttp import web
@@ -612,3 +613,26 @@ async def api_model_pricing(request: web.Request) -> web.Response:
         return web.json_response({
             "models": MODEL_RATES
         })
+
+
+async def api_health_check_channel(request: web.Request) -> web.Response:
+    """Health check a specific channel"""
+    from utils.health_checker import health_checker
+    
+    channel_id = int(request.match_info["id"])
+    result = await health_checker.check_single_channel(channel_id)
+    
+    return web.json_response(result)
+
+
+async def api_health_check_all(request: web.Request) -> web.Response:
+    """Trigger health check for all channels"""
+    from utils.health_checker import health_checker
+    
+    # Run health check in background
+    asyncio.create_task(health_checker.check_all_channels())
+    
+    return web.json_response({
+        "message": "Health check started",
+        "status": "running"
+    })

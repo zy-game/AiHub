@@ -2,6 +2,7 @@ import json
 from aiohttp import web
 from models import get_channel_by_model, Channel
 from utils.logger import logger
+from utils.load_balancer import load_balancer
 
 class RequestContext:
     def __init__(self):
@@ -44,7 +45,7 @@ async def extract_model_from_request(request: web.Request) -> tuple[str, dict, s
     return model, body, input_format
 
 async def distribute(request: web.Request, ctx: RequestContext) -> Channel:
-    """Select appropriate channel based on model name"""
+    """Select appropriate channel based on model name using load balancer"""
     model, body, input_format = await extract_model_from_request(request)
     
     if not model:
@@ -57,7 +58,9 @@ async def distribute(request: web.Request, ctx: RequestContext) -> Channel:
     ctx.body = body
     ctx.input_format = input_format
     
-    channel = await get_channel_by_model(model)
+    # Use load balancer to select channel (weighted strategy by default)
+    channel = await load_balancer.select_channel(model, strategy="weighted")
+    
     if not channel:
         raise web.HTTPServiceUnavailable(
             text=json.dumps({"error": {"message": f"No available channel for model: {model}", "type": "model_not_found"}}),

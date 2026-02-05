@@ -3,6 +3,7 @@ import asyncio
 from utils.logger import logger
 from models import check_and_update_token_status
 from utils.rate_limiter import rate_limiter
+from utils.health_checker import health_checker
 
 
 async def token_cleanup_task():
@@ -27,8 +28,14 @@ async def rate_limiter_cleanup_task():
             logger.error(f"Rate limiter cleanup task error: {e}")
 
 
+async def health_check_task():
+    """Periodically check health of all channels and accounts"""
+    await health_checker.start()
+
+
 async def start_background_tasks():
     """Start all background tasks"""
     logger.info("Starting background tasks...")
     asyncio.create_task(token_cleanup_task())
     asyncio.create_task(rate_limiter_cleanup_task())
+    asyncio.create_task(health_check_task())

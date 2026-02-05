@@ -57,6 +57,9 @@ async def init_tables(db: aiosqlite.Connection):
             priority INTEGER DEFAULT 0,
             weight INTEGER DEFAULT 1,
             enabled INTEGER DEFAULT 1,
+            avg_response_time INTEGER DEFAULT 0,
+            total_requests INTEGER DEFAULT 0,
+            failed_requests INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
@@ -166,6 +169,17 @@ async def init_tables(db: aiosqlite.Connection):
             await db.execute("ALTER TABLE tokens ADD COLUMN rpm_limit INTEGER DEFAULT 0")
         if "tpm_limit" not in column_names:
             await db.execute("ALTER TABLE tokens ADD COLUMN tpm_limit INTEGER DEFAULT 0")
+    
+    # Migrate channels table: add statistics fields if missing
+    async with db.execute("PRAGMA table_info(channels)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        if "avg_response_time" not in column_names:
+            await db.execute("ALTER TABLE channels ADD COLUMN avg_response_time INTEGER DEFAULT 0")
+        if "total_requests" not in column_names:
+            await db.execute("ALTER TABLE channels ADD COLUMN total_requests INTEGER DEFAULT 0")
+        if "failed_requests" not in column_names:
+            await db.execute("ALTER TABLE channels ADD COLUMN failed_requests INTEGER DEFAULT 0")
     
     await db.commit()
     logger.info("Database tables initialized")

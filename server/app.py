@@ -13,7 +13,8 @@ from server.api import (
     api_list_tokens, api_create_token, api_update_token, api_delete_token, api_token_stats, api_model_pricing,
     api_list_logs, api_get_stats,
     api_kiro_device_auth, api_kiro_device_token,
-    api_refresh_account_usage, api_refresh_channel_usage, api_refresh_all_usage
+    api_refresh_account_usage, api_refresh_channel_usage, api_refresh_all_usage,
+    api_health_check_channel, api_health_check_all
 )
 from server.tasks import start_background_tasks
 from utils.logger import logger
@@ -87,6 +88,10 @@ def create_app() -> web.Application:
     app.router.add_post("/api/accounts/{id}/refresh-usage", api_refresh_account_usage)
     app.router.add_post("/api/channels/{id}/refresh-usage", api_refresh_channel_usage)
     app.router.add_post("/api/refresh-all-usage", api_refresh_all_usage)
+    
+    # Health check routes
+    app.router.add_post("/api/channels/{id}/health-check", api_health_check_channel)
+    app.router.add_post("/api/health-check-all", api_health_check_all)
     
     # Static files
     static_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")

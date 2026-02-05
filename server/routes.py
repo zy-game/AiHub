@@ -5,7 +5,7 @@ from aiohttp import web
 from server.distributor import distribute, RequestContext
 from converters import get_converter
 from providers import get_provider
-from models import create_log, update_user_quota, get_all_channels, get_available_account, add_user_tokens, add_account_tokens, update_token_quota, add_token_usage
+from models import create_log, update_user_quota, get_all_channels, get_available_account, add_user_tokens, add_account_tokens, update_token_quota, add_token_usage, update_channel_stats
 from utils.logger import logger
 from utils.text import get_content_text
 from utils.token_counter import count_tokens
@@ -132,6 +132,10 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
                 status=500,
                 error=str(e)
             )
+            
+            # Update channel statistics (failed request)
+            await update_channel_stats(channel.id, duration_ms, success=False)
+            
             return web.json_response(
                 {"error": {"message": str(e), "type": "upstream_error"}},
                 status=502
@@ -231,6 +235,9 @@ async def _handle_stream(request, ctx, channel, account, provider, input_convert
             duration_ms=duration_ms,
             status=200
         )
+        
+        # Update channel statistics
+        await update_channel_stats(channel.id, duration_ms, success=True)
         
         # Update token statistics
         if input_tokens > 0 or total_tokens > 0:

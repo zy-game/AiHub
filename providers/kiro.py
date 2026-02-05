@@ -185,10 +185,26 @@ class KiroProvider(BaseProvider):
         client_secret = creds.get("clientSecret") or creds.get("client_secret")
         region = creds.get("region") or self.DEFAULT_REGION
         profile_arn = creds.get("profileArn") or creds.get("profile_arn")
+        
+        # Check if token is expired and refresh if needed
+        if self._is_token_expired(creds) and refresh_token and client_id and client_secret:
+            logger.info(f"Access token expired, refreshing before usage check...")
+            refresh_result = await self._refresh_token(refresh_token, client_id, client_secret, region)
+            if refresh_result:
+                creds["accessToken"] = refresh_result["accessToken"]
+                creds["expiresIn"] = refresh_result["expiresIn"]
+                creds["refreshedAt"] = refresh_result["refreshedAt"]
+                access_token = refresh_result["accessToken"]
+                await self._persist_credentials(account_id, creds)
+                logger.info(f"Access token refreshed successfully")
+        
         if not access_token and refresh_token and client_id and client_secret:
-            access_token = await self._refresh_token(refresh_token, client_id, client_secret, region)
-            if access_token:
-                creds["accessToken"] = access_token
+            refresh_result = await self._refresh_token(refresh_token, client_id, client_secret, region)
+            if refresh_result:
+                creds["accessToken"] = refresh_result["accessToken"]
+                creds["expiresIn"] = refresh_result["expiresIn"]
+                creds["refreshedAt"] = refresh_result["refreshedAt"]
+                access_token = refresh_result["accessToken"]
                 await self._persist_credentials(account_id, creds)
         if not access_token:
             raise Exception("Missing access token")
@@ -196,11 +212,13 @@ class KiroProvider(BaseProvider):
             return await self._request_usage_limits(access_token, region, profile_arn)
         except Exception as e:
             if "403" in str(e) and refresh_token and client_id and client_secret:
-                access_token = await self._refresh_token(refresh_token, client_id, client_secret, region)
-                if access_token:
-                    creds["accessToken"] = access_token
+                refresh_result = await self._refresh_token(refresh_token, client_id, client_secret, region)
+                if refresh_result:
+                    creds["accessToken"] = refresh_result["accessToken"]
+                    creds["expiresIn"] = refresh_result["expiresIn"]
+                    creds["refreshedAt"] = refresh_result["refreshedAt"]
                     await self._persist_credentials(account_id, creds)
-                    return await self._request_usage_limits(access_token, region, profile_arn)
+                    return await self._request_usage_limits(refresh_result["accessToken"], region, profile_arn)
             raise
 
     def _normalize_thinking_budget_tokens(self, budget_tokens) -> int:
@@ -699,7 +717,9 @@ class KiroProvider(BaseProvider):
             "clientId": "...",      // for token refresh
             "clientSecret": "...",  // for token refresh
             "region": "us-east-1",  // optional
-            "profileArn": "..."     // optional, for social auth
+            "profileArn": "...",    // optional, for social auth
+            "refreshedAt": 1234567890,  // timestamp when token was refreshed
+            "expiresIn": 3600       // token expiry in seconds
         }
         """
         try:
@@ -714,6 +734,21 @@ class KiroProvider(BaseProvider):
         region = creds.get("region", self.DEFAULT_REGION)
         profile_arn = creds.get("profileArn")
         account_id = data.get("_account_id")
+        
+        # Check if token is expired and refresh if needed
+        if self._is_token_expired(creds) and refresh_token and client_id and client_secret:
+            logger.info(f"Access token expired, refreshing...")
+            refresh_result = await self._refresh_token(refresh_token, client_id, client_secret, region)
+            if refresh_result:
+                creds["accessToken"] = refresh_result["accessToken"]
+                creds["expiresIn"] = refresh_result["expiresIn"]
+                creds["refreshedAt"] = refresh_result["refreshedAt"]
+                access_token = refresh_result["accessToken"]
+                await self._persist_credentials(account_id, creds)
+                logger.info(f"Access token refreshed successfully for account {account_id} with time {creds["refreshedAt"]}")
+            else:
+                logger.warning(f"Failed to refresh access token for account {account_id}")
+        
         if not access_token:
             raise Exception("Missing accessToken in Kiro credentials")
         
@@ -735,11 +770,13 @@ class KiroProvider(BaseProvider):
                 yield chunk
         except Exception as e:
             if "403" in str(e) and refresh_token and client_id and client_secret:
-                new_token = await self._refresh_token(refresh_token, client_id, client_secret, region)
-                if new_token:
-                    creds["accessToken"] = new_token
+                refresh_result = await self._refresh_token(refresh_token, client_id, client_secret, region)
+                if refresh_result:
+                    creds["accessToken"] = refresh_result["accessToken"]
+                    creds["expiresIn"] = refresh_result["expiresIn"]
+                    creds["refreshedAt"] = refresh_result["refreshedAt"]
                     await self._persist_credentials(account_id, creds)
-                    headers = self._build_headers(new_token)
+                    headers = self._build_headers(refresh_result["accessToken"])
                     async for chunk in self._chat_stream(url, headers, request_data, model, thinking, messages, system, tools, account_id):
                         yield chunk
                 else:
@@ -765,8 +802,14 @@ class KiroProvider(BaseProvider):
                     if resp.status == 200:
                         data = await resp.json()
                         new_access_token = data.get("accessToken")
+                        expires_in = data.get("expiresIn", 3600)  # Default 1 hour in seconds
                         if new_access_token:
-                            return new_access_token
+                            # Return both token and expiry time
+                            return {
+                                "accessToken": new_access_token,
+                                "expiresIn": expires_in,
+                                "refreshedAt": int(datetime.now(timezone.utc).timestamp())
+                            }
                         else:
                             logger.error("Token refresh response missing accessToken")
                             return None
@@ -777,6 +820,29 @@ class KiroProvider(BaseProvider):
         except Exception as e:
             logger.error(f"Token refresh error: {e}")
             return None
+    
+    def _is_token_expired(self, creds: dict) -> bool:
+        """Check if access token is expired or about to expire"""
+        refreshed_at = creds.get("refreshedAt", 0)
+        expires_in = creds.get("expiresIn", 3600)
+        
+        if refreshed_at == 0:
+            # No refresh time recorded, assume expired
+            logger.info(f"No refreshedAt found in credentials, assuming token expired")
+            return True
+        
+        current_time = int(datetime.now(timezone.utc).timestamp())
+        # Add 60 second buffer to refresh before actual expiry
+        expiry_time = refreshed_at + expires_in - 60
+        
+        is_expired = current_time >= expiry_time
+        if is_expired:
+            logger.info(f"Token expired: current={current_time}, expiry={expiry_time}, refreshed_at={refreshed_at}, expires_in={expires_in}")
+        else:
+            remaining = expiry_time - current_time
+            logger.info(f"Token valid for {remaining} more seconds")
+        
+        return is_expired
     
     async def _chat_stream(self, url: str, headers: dict, data: dict, model: str, thinking: dict = None, messages: list = None, system: str = None, tools: list = None, account_id: int | None = None):
 

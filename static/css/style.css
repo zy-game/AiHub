@@ -385,6 +385,18 @@ h2 {
 .badge-info { background: var(--info-light); color: #1e40af; }
 .badge-gray { background: var(--bg-tertiary); color: var(--text-secondary); }
 
+/* Health Indicator */
+.health-indicator {
+    font-size: 16px;
+    line-height: 1;
+    cursor: help;
+}
+
+.health-good { color: #10b981; }
+.health-warning { color: #f59e0b; }
+.health-bad { color: #ef4444; }
+.health-unknown { color: #6b7280; }
+
 /* Buttons */
 .btn {
     display: inline-flex;

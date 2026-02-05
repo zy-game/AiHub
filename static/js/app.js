@@ -212,15 +212,41 @@ async function loadChannels() {
         const hasMappings = c.model_mapping && Object.keys(c.model_mapping).length > 0;
         const mappingText = hasMappings ? Object.entries(c.model_mapping).slice(0, 2).map(([k,v]) => `${k}→${v}`).join(', ') : '';
         const mappingCount = hasMappings ? Object.keys(c.model_mapping).length : 0;
+        const successRate = c.total_requests > 0 ? ((1 - (c.failed_requests || 0) / c.total_requests) * 100).toFixed(1) : '100.0';
+        
+        // Health status indicator
+        let healthBadge = '';
+        if (c.enabled && c.account_count > 0) {
+            if (c.total_requests > 0) {
+                const rate = parseFloat(successRate);
+                if (rate >= 95) {
+                    healthBadge = '<span class="health-indicator health-good" title="健康 (成功率: ' + successRate + '%)">●</span>';
+                } else if (rate >= 80) {
+                    healthBadge = '<span class="health-indicator health-warning" title="一般 (成功率: ' + successRate + '%)">●</span>';
+                } else {
+                    healthBadge = '<span class="health-indicator health-bad" title="异常 (成功率: ' + successRate + '%)">●</span>';
+                }
+            } else {
+                // No requests yet, show as healthy if enabled and has accounts
+                healthBadge = '<span class="health-indicator health-good" title="就绪 (未有请求)">●</span>';
+            }
+        } else if (!c.enabled) {
+            healthBadge = '<span class="health-indicator health-unknown" title="已禁用">●</span>';
+        } else {
+            healthBadge = '<span class="health-indicator health-unknown" title="无账号">●</span>';
+        }
         
         return `
-        <div class="item-card">
+        <div class="item-card" id="channel-card-${c.id}">
             <div class="item-card-header">
                 <div>
-                    <div class="item-card-title">${c.name}</div>
-                    <div class="item-card-subtitle">ID: ${c.id} | 优先级: ${c.priority}</div>
+                    <div class="item-card-title">${healthBadge} ${c.name}</div>
+                    <div class="item-card-subtitle">ID: ${c.id} | 优先级: ${c.priority} | 权重: ${c.weight}</div>
                 </div>
-                <div>${getTypeBadge(c.type)} ${c.enabled ? getBadge('success','启用') : getBadge('danger','禁用')}</div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    ${getTypeBadge(c.type)}
+                    ${c.enabled ? getBadge('success','启用') : getBadge('danger','禁用')}
+                </div>
             </div>
             <div class="item-card-body">
                 <div class="item-card-row">
@@ -231,6 +257,15 @@ async function loadChannels() {
                     <span class="item-card-label">Token数</span>
                     <span class="item-card-value">${formatTokens(c.total_tokens)}</span>
                 </div>
+                ${c.total_requests > 0 ? `
+                <div class="item-card-row">
+                    <span class="item-card-label">请求数</span>
+                    <span class="item-card-value">${c.total_requests} (成功率: ${successRate}%)</span>
+                </div>
+                <div class="item-card-row">
+                    <span class="item-card-label">平均响应</span>
+                    <span class="item-card-value">${c.avg_response_time}ms</span>
+                </div>` : ''}
                 ${hasMappings ? `
                 <div class="item-card-row">
                     <span class="item-card-label">模型映射</span>
@@ -241,12 +276,64 @@ async function loadChannels() {
             </div>
             <div class="item-card-footer">
                 ${c.type==='kiro'?`<button class="btn btn-xs" onclick="refreshChannelUsage(${c.id})">刷新</button>`:''}
+                <button class="btn btn-xs" id="health-check-btn-${c.id}" onclick="healthCheckChannel(${c.id})">健康检查</button>
                 <button class="btn btn-xs" onclick="editChannel(${c.id})">编辑</button>
                 <button class="btn btn-xs btn-danger" onclick="deleteChannel(${c.id})">删除</button>
             </div>
         </div>
     `;
     }).join('');
+}
+
+async function healthCheckChannel(id) {
+    const btn = document.getElementById(`health-check-btn-${id}`);
+    if (!btn) return;
+    
+    // Disable button and show loading state
+    btn.disabled = true;
+    btn.textContent = '检查中...';
+    
+    try {
+        const result = await API.post(`/api/channels/${id}/health-check`);
+        
+        const healthy = result.healthy_accounts || 0;
+        const total = result.total_accounts || 0;
+        
+        // Update button text with result
+        if (healthy === total && total > 0) {
+            btn.textContent = `✅ ${healthy}/${total}`;
+            btn.classList.add('btn-success');
+        } else if (healthy > 0) {
+            btn.textContent = `⚠️ ${healthy}/${total}`;
+            btn.classList.add('btn-warning');
+        } else {
+            btn.textContent = `❌ ${healthy}/${total}`;
+            btn.classList.add('btn-danger');
+        }
+        
+        // Re-enable button after 3 seconds
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = '健康检查';
+            btn.classList.remove('btn-success', 'btn-warning', 'btn-danger');
+        }, 3000);
+        
+        // Reload channels to update statistics
+        setTimeout(() => {
+            loadChannels();
+        }, 3500);
+        
+    } catch (err) {
+        btn.textContent = '检查失败';
+        btn.classList.add('btn-danger');
+        
+        // Re-enable button after 2 seconds
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = '健康检查';
+            btn.classList.remove('btn-danger');
+        }, 2000);
+    }
 }
 
 async function refreshChannelUsage(id) {
@@ -271,6 +358,7 @@ function showChannelModal(c = null) {
     document.getElementById('channel-models').value = c?.models?.join(', ') || '';
     document.getElementById('channel-model-mapping').value = c?.model_mapping ? JSON.stringify(c.model_mapping, null, 2) : '';
     document.getElementById('channel-priority').value = c?.priority || 0;
+    document.getElementById('channel-weight').value = c?.weight || 1;
     document.getElementById('channel-modal').classList.add('active');
 }
 
@@ -305,7 +393,8 @@ document.getElementById('channel-form').addEventListener('submit', async e => {
         type: document.getElementById('channel-type').value,
         models: document.getElementById('channel-models').value.split(',').map(s=>s.trim()).filter(Boolean),
         model_mapping: modelMapping,
-        priority: parseInt(document.getElementById('channel-priority').value) || 0
+        priority: parseInt(document.getElementById('channel-priority').value) || 0,
+        weight: parseInt(document.getElementById('channel-weight').value) || 1
     };
     id ? await API.put(`/api/channels/${id}`, data) : await API.post('/api/channels', data);
     closeModal('channel-modal');
