@@ -19,6 +19,7 @@
             <li><a href="#" data-page="channels">渠道</a></li>
             <li><a href="#" data-page="accounts">账号</a></li>
             <li><a href="#" data-page="users">用户</a></li>
+            <li><a href="#" data-page="tokens">令牌</a></li>
             <li><a href="#" data-page="logs">日志</a></li>
         </ul>
     </nav>
@@ -117,6 +118,17 @@
                 </div>
             </div>
             <div id="users-grid" class="card-grid"></div>
+        </section>
+        
+        <!-- Tokens -->
+        <section id="page-tokens" class="page">
+            <div class="page-header">
+                <h1>令牌管理</h1>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="showTokenModal()">+ 添加令牌</button>
+                </div>
+            </div>
+            <div id="tokens-grid" class="card-grid"></div>
         </section>
         
         <!-- Logs -->
@@ -257,6 +269,63 @@
                 </div>
                 <div class="form-actions">
                     <button type="button" class="btn" onclick="closeModal('user-modal')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Token Modal -->
+    <div id="token-modal" class="modal">
+        <div class="modal-content">
+            <h2 id="token-modal-title">添加令牌</h2>
+            <form id="token-form">
+                <input type="hidden" id="token-id">
+                <div class="form-group">
+                    <label>名称</label>
+                    <input type="text" id="token-name" placeholder="令牌名称" required>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="token-unlimited-quota" style="margin-right: 8px;">
+                        <span>无限额度</span>
+                    </label>
+                </div>
+                <div class="form-group" id="token-quota-group">
+                    <label>剩余配额</label>
+                    <input type="number" id="token-remain-quota" value="100000" min="0">
+                </div>
+                <div class="form-group">
+                    <label>过期时间（留空 = 永不过期）</label>
+                    <input type="datetime-local" id="token-expired-time">
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="token-model-limits-enabled" style="margin-right: 8px;">
+                        <span>启用模型限制</span>
+                    </label>
+                </div>
+                <div class="form-group" id="token-models-group" style="display:none;">
+                    <label>允许的模型（逗号分隔）</label>
+                    <input type="text" id="token-model-limits" placeholder="gpt-4,claude-3-opus,gemini-pro">
+                    <small class="help-text">例如：gpt-4,gpt-4-turbo,claude-3-opus</small>
+                </div>
+                <div class="form-group">
+                    <label>IP白名单（每行一个，留空 = 允许所有）</label>
+                    <textarea id="token-ip-whitelist" rows="3" placeholder="192.168.1.1&#10;10.0.0.0/24"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>分组</label>
+                    <input type="text" id="token-group" value="default" placeholder="default">
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="token-cross-group-retry" style="margin-right: 8px;">
+                        <span>启用跨分组重试</span>
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeModal('token-modal')">取消</button>
                     <button type="submit" class="btn btn-primary">保存</button>
                 </div>
             </form>

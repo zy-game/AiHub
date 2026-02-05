@@ -196,6 +196,71 @@ h2 {
     gap: 16px;
 }
 
+/* Card (for Tokens and Users) */
+.card {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    padding: 20px;
+    transition: all 0.2s;
+}
+
+.card:hover {
+    box-shadow: var(--card-shadow-hover);
+    border-color: var(--border-hover);
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.card-body {
+    margin-bottom: 16px;
+}
+
+.card-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-info:last-child {
+    border-bottom: none;
+}
+
+.card-info .label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.card-info .value {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.card-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+
 /* Item Card */
 .item-card {
     background: var(--bg-secondary);
@@ -372,14 +437,34 @@ h2 {
 /* Token Stats */
 .token-stats {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
     background: var(--bg-tertiary);
-    padding: 12px;
+    padding: 16px;
     border-radius: 8px;
-    margin-top: 8px;
+    margin-top: 12px;
 }
 
+.token-stats .stat-item {
+    text-align: center;
+}
+
+.token-stats .stat-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.token-stats .stat-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* Legacy token-stat support */
 .token-stat {
     text-align: center;
 }

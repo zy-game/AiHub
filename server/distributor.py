@@ -6,6 +6,7 @@ from utils.logger import logger
 class RequestContext:
     def __init__(self):
         self.user = None
+        self.token = None
         self.channel: Channel = None
         self.model: str = None
         self.input_format: str = None  # openai, claude, gemini

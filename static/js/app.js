@@ -92,7 +92,7 @@ function showPage(page) {
 }
 
 function loadPageData(page) {
-    const loaders = { dashboard: loadDashboard, channels: loadChannels, accounts: loadAccountsAll, users: loadUsers, logs: loadLogs };
+    const loaders = { dashboard: loadDashboard, channels: loadChannels, accounts: loadAccountsAll, users: loadUsers, tokens: loadTokens, logs: loadLogs };
     loaders[page]?.();
 }
 
@@ -445,33 +445,38 @@ async function deleteAccountAll(id) { if (confirm('确认删除此账号？')) {
 async function loadUsers() {
     const users = await API.get('/api/users');
     document.getElementById('users-grid').innerHTML = users.map(u => `
-        <div class="item-card">
-            <div class="item-card-header">
-                <div>
-                    <div class="item-card-title">${u.name || '用户 #' + u.id}</div>
-                    <div class="item-card-subtitle">ID: ${u.id} | 请求数: ${u.request_count || 0}</div>
-                </div>
+        <div class="card">
+            <div class="card-header">
+                <h3>${u.name || '用户 #' + u.id}</h3>
                 ${u.enabled ? getBadge('success','启用') : getBadge('danger','禁用')}
             </div>
-            <div class="item-card-body">
-                <div class="item-card-row">
-                    <span class="item-card-label">API Key</span>
-                    <span class="item-card-value"><span class="api-key">${u.api_key.substring(0,20)}...</span></span>
+            <div class="card-body">
+                <div class="card-info">
+                    <span class="label">用户ID:</span>
+                    <span class="value">${u.id}</span>
                 </div>
-                <div class="item-card-row">
-                    <span class="item-card-label">配额</span>
-                    <span class="item-card-value">${u.quota === -1 ? '无限制' : u.used_quota.toLocaleString() + ' / ' + u.quota.toLocaleString()}</span>
+                <div class="card-info">
+                    <span class="label">配额:</span>
+                    <span class="value">${u.quota === -1 ? '无限制' : u.used_quota.toLocaleString() + ' / ' + u.quota.toLocaleString()}</span>
                 </div>
                 ${u.quota !== -1 ? getProgressBar(u.used_quota, u.quota, '配额') : ''}
                 <div class="token-stats">
-                    <div class="token-stat"><div class="token-stat-value">${formatTokens(u.input_tokens)}</div><div class="token-stat-label">输入</div></div>
-                    <div class="token-stat"><div class="token-stat-value">${formatTokens(u.output_tokens)}</div><div class="token-stat-label">输出</div></div>
-                    <div class="token-stat"><div class="token-stat-value">${formatTokens(u.total_tokens)}</div><div class="token-stat-label">总计</div></div>
+                    <div class="stat-item">
+                        <div class="stat-label">输入Token</div>
+                        <div class="stat-value">${formatTokens(u.input_tokens)}</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">输出Token</div>
+                        <div class="stat-value">${formatTokens(u.output_tokens)}</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">总Token</div>
+                        <div class="stat-value">${formatTokens(u.total_tokens)}</div>
+                    </div>
                 </div>
             </div>
-            <div class="item-card-footer">
-                <button class="btn btn-xs" onclick="copyApiKey('${u.api_key}')">复制密钥</button>
-                <button class="btn btn-xs btn-danger" onclick="deleteUser(${u.id})">删除</button>
+            <div class="card-actions">
+                <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id})">删除</button>
             </div>
         </div>
     `).join('');
@@ -486,7 +491,6 @@ function showUserModal() {
 }
 
 async function deleteUser(id) { if (confirm('确认删除此用户？')) { await API.delete(`/api/users/${id}`); loadUsers(); } }
-function copyApiKey(key) { navigator.clipboard.writeText(key); alert('API Key 已复制！'); }
 
 document.getElementById('user-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -578,6 +582,194 @@ document.getElementById('import-form').addEventListener('submit', async e => {
 
 // Modal
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+// ===== Token Management =====
+async function loadTokens() {
+    const tokens = await API.get('/api/tokens');
+    
+    const grid = document.getElementById('tokens-grid');
+    grid.innerHTML = tokens.map(t => {
+        const statusText = {1: '启用', 2: '禁用', 3: '已用尽', 4: '已过期'}[t.status] || '未知';
+        const statusClass = {1: 'success', 2: 'warning', 3: 'error', 4: 'error'}[t.status] || '';
+        const expiredText = t.expired_time === -1 ? '永不过期' : formatDate(t.expired_time * 1000);
+        const quotaText = t.unlimited_quota ? '无限' : `${t.remain_quota.toLocaleString()} / ${(t.remain_quota + t.used_quota).toLocaleString()}`;
+        
+        return `
+            <div class="card">
+                <div class="card-header">
+                    <h3>${t.name || '未命名令牌'}</h3>
+                    <span class="badge badge-${statusClass}">${statusText}</span>
+                </div>
+                <div class="card-body">
+                    <div class="card-info">
+                        <span class="label">Key:</span>
+                        <span class="value" style="display: flex; align-items: center; gap: 8px;">
+                            <code id="token-key-${t.id}">${t.key.substring(0, 20)}...${t.key.substring(t.key.length - 4)}</code>
+                            <button class="btn btn-sm" onclick="copyTokenKey('${t.key}', ${t.id})" title="复制完整Key">📋</button>
+                        </span>
+                    </div>
+                    <div class="card-info">
+                        <span class="label">配额:</span>
+                        <span class="value">${quotaText}</span>
+                    </div>
+                    <div class="card-info">
+                        <span class="label">过期时间:</span>
+                        <span class="value">${expiredText}</span>
+                    </div>
+                    <div class="card-info">
+                        <span class="label">分组:</span>
+                        <span class="value">${t.group}</span>
+                    </div>
+                    ${t.model_limits_enabled ? `
+                    <div class="card-info">
+                        <span class="label">模型限制:</span>
+                        <span class="value">${t.model_limits || '无'}</span>
+                    </div>` : ''}
+                    ${t.cross_group_retry ? `
+                    <div class="card-info">
+                        <span class="label">跨分组重试:</span>
+                        <span class="value">✅ 已启用</span>
+                    </div>` : ''}
+                    <div class="token-stats">
+                        <div class="stat-item">
+                            <div class="stat-label">请求数</div>
+                            <div class="stat-value">${t.request_count || 0}</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">输入Token</div>
+                            <div class="stat-value">${formatTokens(t.input_tokens)}</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">输出Token</div>
+                            <div class="stat-value">${formatTokens(t.output_tokens)}</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">总Token</div>
+                            <div class="stat-value">${formatTokens(t.total_tokens)}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-actions">
+                    <button class="btn btn-sm" onclick="editToken(${t.id})">编辑</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteToken(${t.id}, '${t.name}')">删除</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function copyTokenKey(key, tokenId) {
+    navigator.clipboard.writeText(key).then(() => {
+        const btn = event.target;
+        const originalText = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => btn.textContent = originalText, 2000);
+    }).catch(err => {
+        alert('复制失败：' + err);
+    });
+}
+
+async function showTokenModal() {
+    document.getElementById('token-modal-title').textContent = '添加令牌';
+    document.getElementById('token-id').value = '';
+    document.getElementById('token-name').value = '';
+    document.getElementById('token-unlimited-quota').checked = false;
+    document.getElementById('token-remain-quota').value = '100000';
+    document.getElementById('token-expired-time').value = '';
+    document.getElementById('token-model-limits-enabled').checked = false;
+    document.getElementById('token-model-limits').value = '';
+    document.getElementById('token-ip-whitelist').value = '';
+    document.getElementById('token-group').value = 'default';
+    document.getElementById('token-cross-group-retry').checked = false;
+    
+    toggleTokenQuotaField();
+    toggleTokenModelsField();
+    document.getElementById('token-modal').classList.add('active');
+}
+
+async function editToken(id) {
+    const tokens = await API.get('/api/tokens');
+    const token = tokens.find(t => t.id === id);
+    if (!token) return;
+    
+    document.getElementById('token-modal-title').textContent = '编辑令牌';
+    document.getElementById('token-id').value = token.id;
+    document.getElementById('token-name').value = token.name;
+    document.getElementById('token-unlimited-quota').checked = token.unlimited_quota;
+    document.getElementById('token-remain-quota').value = token.remain_quota;
+    
+    if (token.expired_time !== -1) {
+        const date = new Date(token.expired_time * 1000);
+        document.getElementById('token-expired-time').value = date.toISOString().slice(0, 16);
+    } else {
+        document.getElementById('token-expired-time').value = '';
+    }
+    
+    document.getElementById('token-model-limits-enabled').checked = token.model_limits_enabled;
+    document.getElementById('token-model-limits').value = token.model_limits;
+    document.getElementById('token-ip-whitelist').value = token.ip_whitelist;
+    document.getElementById('token-group').value = token.group;
+    document.getElementById('token-cross-group-retry').checked = token.cross_group_retry || false;
+    
+    toggleTokenQuotaField();
+    toggleTokenModelsField();
+    document.getElementById('token-modal').classList.add('active');
+}
+
+async function deleteToken(id, name) {
+    if (!confirm(`确定要删除令牌 "${name}" 吗？`)) return;
+    await API.delete(`/api/tokens/${id}`);
+    alert('删除成功');
+    loadTokens();
+}
+
+function toggleTokenQuotaField() {
+    const unlimited = document.getElementById('token-unlimited-quota').checked;
+    document.getElementById('token-quota-group').style.display = unlimited ? 'none' : 'block';
+}
+
+function toggleTokenModelsField() {
+    const enabled = document.getElementById('token-model-limits-enabled').checked;
+    document.getElementById('token-models-group').style.display = enabled ? 'block' : 'none';
+}
+
+// Token form event listeners
+document.getElementById('token-unlimited-quota').addEventListener('change', toggleTokenQuotaField);
+document.getElementById('token-model-limits-enabled').addEventListener('change', toggleTokenModelsField);
+
+document.getElementById('token-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const id = document.getElementById('token-id').value;
+    
+    const expiredTimeInput = document.getElementById('token-expired-time').value;
+    let expiredTime = -1;
+    if (expiredTimeInput) {
+        expiredTime = Math.floor(new Date(expiredTimeInput).getTime() / 1000);
+    }
+    
+    const data = {
+        name: document.getElementById('token-name').value,
+        unlimited_quota: document.getElementById('token-unlimited-quota').checked,
+        remain_quota: parseInt(document.getElementById('token-remain-quota').value) || 0,
+        expired_time: expiredTime,
+        model_limits_enabled: document.getElementById('token-model-limits-enabled').checked,
+        model_limits: document.getElementById('token-model-limits').value.trim(),
+        ip_whitelist: document.getElementById('token-ip-whitelist').value.trim(),
+        group: document.getElementById('token-group').value.trim() || 'default',
+        cross_group_retry: document.getElementById('token-cross-group-retry').checked
+    };
+    
+    if (id) {
+        await API.put(`/api/tokens/${id}`, data);
+        alert('更新成功');
+    } else {
+        const result = await API.post('/api/tokens', data);
+        alert(`创建成功！\n\nToken Key:\n${result.key}\n\n请妥善保管，此Key只显示一次！`);
+    }
+    
+    closeModal('token-modal');
+    loadTokens();
+});
 
 // Init
 loadDashboard();

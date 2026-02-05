@@ -1,7 +1,7 @@
 import json
 import time
 from aiohttp import web
-from models import get_user_by_api_key, create_log, update_user_quota
+from models import get_user_by_api_key, get_token_by_key, create_log, update_user_quota
 from utils.logger import logger
 from config import ADMIN_KEY
 
@@ -34,6 +34,31 @@ async def auth_middleware(request: web.Request, handler):
             status=401
         )
     
+    # Try to authenticate with Token first (new system)
+    token = await get_token_by_key(api_key)
+    if token:
+        # Validate token
+        is_valid, error_msg = token.is_valid()
+        if not is_valid:
+            return web.json_response(
+                {"error": {"message": error_msg, "type": "authentication_error"}},
+                status=401
+            )
+        
+        # Check IP whitelist
+        client_ip = request.remote
+        if not token.is_ip_allowed(client_ip):
+            return web.json_response(
+                {"error": {"message": "IP not allowed", "type": "authentication_error"}},
+                status=403
+            )
+        
+        request["token"] = token
+        request["user"] = None  # Token-based auth doesn't use user
+        request["start_time"] = time.time()
+        return await handler(request)
+    
+    # Fallback to User authentication (legacy system)
     user = await get_user_by_api_key(api_key)
     if not user:
         return web.json_response(
@@ -48,6 +73,7 @@ async def auth_middleware(request: web.Request, handler):
         )
     
     request["user"] = user
+    request["token"] = None
     request["start_time"] = time.time()
     
     return await handler(request)

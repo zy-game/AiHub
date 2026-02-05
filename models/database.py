@@ -83,6 +83,30 @@ async def init_tables(db: aiosqlite.Connection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
+        CREATE TABLE IF NOT EXISTS tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            key TEXT UNIQUE NOT NULL,
+            name TEXT DEFAULT '',
+            status INTEGER DEFAULT 1,
+            unlimited_quota INTEGER DEFAULT 0,
+            remain_quota INTEGER DEFAULT 0,
+            used_quota INTEGER DEFAULT 0,
+            created_time INTEGER NOT NULL,
+            accessed_time INTEGER DEFAULT 0,
+            expired_time INTEGER DEFAULT -1,
+            model_limits_enabled INTEGER DEFAULT 0,
+            model_limits TEXT DEFAULT '',
+            ip_whitelist TEXT DEFAULT '',
+            "group" TEXT DEFAULT 'default',
+            cross_group_retry INTEGER DEFAULT 0,
+            input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            total_tokens INTEGER DEFAULT 0,
+            request_count INTEGER DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        
         CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -100,6 +124,8 @@ async def init_tables(db: aiosqlite.Connection):
         CREATE INDEX IF NOT EXISTS idx_channels_models ON channels(models);
         CREATE INDEX IF NOT EXISTS idx_accounts_channel ON accounts(channel_id, enabled);
         CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
+        CREATE INDEX IF NOT EXISTS idx_tokens_key ON tokens(key);
+        CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
         CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at);
     """)
     # Migrate accounts table: add usage/limit columns if missing
@@ -127,6 +153,13 @@ async def init_tables(db: aiosqlite.Connection):
             await db.execute("ALTER TABLE users ADD COLUMN output_tokens INTEGER DEFAULT 0")
         if "total_tokens" not in column_names:
             await db.execute("ALTER TABLE users ADD COLUMN total_tokens INTEGER DEFAULT 0")
+    
+    # Migrate tokens table: add cross_group_retry if missing
+    async with db.execute("PRAGMA table_info(tokens)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        if "cross_group_retry" not in column_names:
+            await db.execute("ALTER TABLE tokens ADD COLUMN cross_group_retry INTEGER DEFAULT 0")
     
     await db.commit()
     logger.info("Database tables initialized")

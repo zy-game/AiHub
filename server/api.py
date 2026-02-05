@@ -463,3 +463,130 @@ async def api_refresh_all_usage(request: web.Request) -> web.Response:
         results["channels"].append(channel_result)
     
     return web.json_response(results)
+
+
+# Token API
+async def api_list_tokens(request: web.Request) -> web.Response:
+    """Get all tokens"""
+    from models import get_all_tokens
+    user_id = request.query.get("user_id")
+    if user_id:
+        user_id = int(user_id)
+    
+    tokens = await get_all_tokens(user_id)
+    result = []
+    for t in tokens:
+        result.append({
+            "id": t.id,
+            "user_id": t.user_id,
+            "key": t.key,
+            "name": t.name,
+            "status": t.status,
+            "unlimited_quota": t.unlimited_quota,
+            "remain_quota": t.remain_quota,
+            "used_quota": t.used_quota,
+            "created_time": t.created_time,
+            "accessed_time": t.accessed_time,
+            "expired_time": t.expired_time,
+            "model_limits_enabled": t.model_limits_enabled,
+            "model_limits": t.model_limits,
+            "ip_whitelist": t.ip_whitelist,
+            "group": t.group,
+            "input_tokens": t.input_tokens,
+            "output_tokens": t.output_tokens,
+            "total_tokens": t.total_tokens,
+            "request_count": t.request_count
+        })
+    return web.json_response(result)
+
+
+async def api_create_token(request: web.Request) -> web.Response:
+    """Create a new token"""
+    from models import create_token
+    data = await request.json()
+    
+    token_id, key = await create_token(
+        name=data.get("name", ""),
+        unlimited_quota=data.get("unlimited_quota", False),
+        remain_quota=data.get("remain_quota", 0),
+        expired_time=data.get("expired_time", -1),
+        model_limits_enabled=data.get("model_limits_enabled", False),
+        model_limits=data.get("model_limits", ""),
+        ip_whitelist=data.get("ip_whitelist", ""),
+        group=data.get("group", "default"),
+        cross_group_retry=data.get("cross_group_retry", False),
+        user_id=data.get("user_id", 0)
+    )
+    
+    return web.json_response({"id": token_id, "key": key})
+
+
+async def api_update_token(request: web.Request) -> web.Response:
+    """Update a token"""
+    from models import update_token
+    token_id = int(request.match_info["id"])
+    data = await request.json()
+    
+    await update_token(token_id, **data)
+    return web.json_response({"success": True})
+
+
+async def api_delete_token(request: web.Request) -> web.Response:
+    """Delete a token"""
+    from models import delete_token
+    token_id = int(request.match_info["id"])
+    await delete_token(token_id)
+    return web.json_response({"success": True})
+
+
+async def api_token_stats(request: web.Request) -> web.Response:
+    """Get token usage statistics"""
+    from models import get_all_tokens, get_db
+    
+    days = int(request.query.get("days", 7))
+    
+    # Get all tokens with stats
+    tokens = await get_all_tokens()
+    
+    # Get detailed usage from logs
+    db = await get_db()
+    
+    # Token usage over time
+    async with db.execute(
+        """SELECT 
+            DATE(created_at) as date,
+            SUM(input_tokens) as input_tokens,
+            SUM(output_tokens) as output_tokens,
+            COUNT(*) as requests
+           FROM logs
+           WHERE created_at >= datetime('now', '-' || ? || ' days')
+           GROUP BY DATE(created_at)
+           ORDER BY date""",
+        (days,)
+    ) as cursor:
+        daily_stats = [dict(row) for row in await cursor.fetchall()]
+    
+    # Top tokens by usage
+    token_usage = []
+    for token in tokens:
+        token_usage.append({
+            "id": token.id,
+            "name": token.name,
+            "key": token.key[:20] + "...",
+            "input_tokens": token.input_tokens,
+            "output_tokens": token.output_tokens,
+            "total_tokens": token.total_tokens,
+            "request_count": token.request_count,
+            "used_quota": token.used_quota,
+            "remain_quota": token.remain_quota,
+            "group": token.group
+        })
+    
+    # Sort by total tokens
+    token_usage.sort(key=lambda x: x["total_tokens"], reverse=True)
+    
+    return web.json_response({
+        "daily_stats": daily_stats,
+        "top_tokens": token_usage[:10],
+        "all_tokens": token_usage
+    })

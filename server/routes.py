@@ -1,10 +1,11 @@
 import json
 import time
+import asyncio
 from aiohttp import web
 from server.distributor import distribute, RequestContext
 from converters import get_converter
 from providers import get_provider
-from models import create_log, update_user_quota, get_all_channels, get_available_account, add_user_tokens, add_account_tokens
+from models import create_log, update_user_quota, get_all_channels, get_available_account, add_user_tokens, add_account_tokens, update_token_quota, add_token_usage
 from utils.logger import logger
 from utils.text import get_content_text
 from utils.token_counter import count_tokens
@@ -29,11 +30,20 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
     ctx = RequestContext()
     ctx.start_time = time.time()
     ctx.user = request.get("user")
+    ctx.token = request.get("token")
     
     try:
         channel = await distribute(request, ctx)
     except web.HTTPException as e:
         return e
+    
+    # Check model access for token-based auth
+    if ctx.token and ctx.token.model_limits_enabled:
+        if not ctx.token.has_model_access(ctx.model):
+            return web.json_response(
+                {"error": {"message": f"Token does not have access to model: {ctx.model}", "type": "permission_error"}},
+                status=403
+            )
     
     # Get converter and provider
     input_converter = get_converter(input_format if input_format != "openai_responses" else "openai")
@@ -52,37 +62,79 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
     # Get mapped model name
     mapped_model = channel.get_mapped_model(ctx.model)
     
-    # Get available account from channel's pool
-    account = await get_available_account(channel.id)
-    if not account:
-        return web.json_response(
-            {"error": {"message": f"No available account for channel: {channel.name}", "type": "no_account"}},
-            status=503
-        )
+    # Retry logic with cross-group support
+    max_retries = 3
+    last_error = None
     
-    if channel.type == "kiro":
-        converted_request["_account_id"] = account.id
+    for attempt in range(max_retries):
+        try:
+            # Get available account from channel's pool
+            account = await get_available_account(channel.id)
+            
+            # If no account and cross-group retry is enabled
+            if not account and ctx.token and ctx.token.cross_group_retry and attempt > 0:
+                logger.warning(f"No account in channel {channel.name}, trying cross-group retry...")
+                # Try to find another channel with different group
+                channels = await get_all_channels()
+                for alt_channel in channels:
+                    if alt_channel.id != channel.id and alt_channel.enabled and ctx.model in alt_channel.models:
+                        alt_account = await get_available_account(alt_channel.id)
+                        if alt_account:
+                            channel = alt_channel
+                            account = alt_account
+                            mapped_model = channel.get_mapped_model(ctx.model)
+                            provider = get_provider(channel.type)
+                            target_format = provider.get_format()
+                            converted_request = input_converter.convert_request(ctx.body, target_format)
+                            logger.warning(f"Cross-group retry: switched to channel {channel.name}")
+                            break
+            
+            if not account:
+                if attempt < max_retries - 1:
+                    last_error = "No available account"
+                    await asyncio.sleep(1)  # Wait before retry
+                    continue
+                return web.json_response(
+                    {"error": {"message": f"No available account for channel: {channel.name}", "type": "no_account"}},
+                    status=503
+                )
+            
+            if channel.type == "kiro":
+                converted_request["_account_id"] = account.id
 
-    try:
-        return await _handle_stream(
-            request, ctx, channel, account, provider, input_converter,
-            mapped_model, converted_request, target_format, input_format
-        )
-    except Exception as e:
-        logger.exception(f"Relay error: {e}")
-        duration_ms = int((time.time() - ctx.start_time) * 1000)
-        await create_log(
-            user_id=ctx.user.id if ctx.user else 0,
-            channel_id=channel.id,
-            model=ctx.model,
-            duration_ms=duration_ms,
-            status=500,
-            error=str(e)
-        )
-        return web.json_response(
-            {"error": {"message": str(e), "type": "upstream_error"}},
-            status=502
-        )
+            return await _handle_stream(
+                request, ctx, channel, account, provider, input_converter,
+                mapped_model, converted_request, target_format, input_format
+            )
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1)  # Wait before retry
+                continue
+            # Last attempt failed
+            logger.exception(f"All retries failed: {e}")
+            duration_ms = int((time.time() - ctx.start_time) * 1000)
+            
+            user_id = 0
+            if ctx.token:
+                user_id = ctx.token.user_id
+            elif ctx.user:
+                user_id = ctx.user.id
+            
+            await create_log(
+                user_id=user_id,
+                channel_id=channel.id,
+                model=ctx.model,
+                duration_ms=duration_ms,
+                status=500,
+                error=str(e)
+            )
+            return web.json_response(
+                {"error": {"message": str(e), "type": "upstream_error"}},
+                status=502
+            )
 
 async def _handle_stream(request, ctx, channel, account, provider, input_converter,
                           mapped_model, converted_request, target_format, input_format):
@@ -161,8 +213,16 @@ async def _handle_stream(request, ctx, channel, account, provider, input_convert
         logger.error(traceback.format_exc())
     finally:
         duration_ms = int((time.time() - ctx.start_time) * 1000)
+        
+        # Determine user_id for logging
+        user_id = 0
+        if ctx.token:
+            user_id = ctx.token.user_id
+        elif ctx.user:
+            user_id = ctx.user.id
+        
         await create_log(
-            user_id=ctx.user.id if ctx.user else 0,
+            user_id=user_id,
             channel_id=channel.id,
             model=ctx.model,
             input_tokens=input_tokens,
@@ -173,9 +233,17 @@ async def _handle_stream(request, ctx, channel, account, provider, input_convert
         
         # Update token statistics
         if input_tokens > 0 or total_tokens > 0:
-            # Update user tokens
+            # Update token usage (new system)
+            if ctx.token:
+                await add_token_usage(ctx.token.id, input_tokens, total_tokens)
+                # Update quota if not unlimited
+                if not ctx.token.unlimited_quota:
+                    await update_token_quota(ctx.token.id, input_tokens + total_tokens)
+            
+            # Update user tokens (legacy system)
             if ctx.user:
                 await add_user_tokens(ctx.user.id, input_tokens, total_tokens)
+            
             # Update account tokens
             await add_account_tokens(account.id, input_tokens, total_tokens)
         
