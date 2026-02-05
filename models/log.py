@@ -1,0 +1,138 @@
+from datetime import datetime, timedelta
+from .database import get_db
+
+async def create_log(user_id: int, channel_id: int, model: str, 
+                     input_tokens: int = 0, output_tokens: int = 0,
+                     duration_ms: int = 0, status: int = 200, error: str = None):
+    db = await get_db()
+    await db.execute(
+        """INSERT INTO logs (user_id, channel_id, model, input_tokens, output_tokens, 
+           duration_ms, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, channel_id, model, input_tokens, output_tokens, duration_ms, status, error)
+    )
+    await db.commit()
+
+async def get_logs(limit: int = 100, offset: int = 0):
+    db = await get_db()
+    async with db.execute(
+        """SELECT l.*, c.name as channel_name, u.name as user_name 
+           FROM logs l 
+           LEFT JOIN channels c ON l.channel_id = c.id
+           LEFT JOIN users u ON l.user_id = u.id
+           ORDER BY l.created_at DESC LIMIT ? OFFSET ?""",
+        (limit, offset)
+    ) as cursor:
+        return [dict(row) for row in await cursor.fetchall()]
+
+async def get_stats(days: int = 7):
+    db = await get_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    
+    async with db.execute(
+        """SELECT COUNT(*) as total_requests,
+                  SUM(input_tokens) as total_input_tokens,
+                  SUM(output_tokens) as total_output_tokens,
+                  AVG(duration_ms) as avg_duration,
+                  SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as error_count
+           FROM logs WHERE created_at >= ?""",
+        (since,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        return dict(row) if row else {}
+
+async def get_model_stats(days: int = 7):
+    db = await get_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    
+    async with db.execute(
+        """SELECT model, COUNT(*) as count, 
+                  SUM(input_tokens + output_tokens) as total_tokens
+           FROM logs WHERE created_at >= ?
+           GROUP BY model ORDER BY count DESC""",
+        (since,)
+    ) as cursor:
+        return [dict(row) for row in await cursor.fetchall()]
+
+async def get_channel_token_usage(channel_id: int) -> dict:
+    """Get total token usage for a channel"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT COALESCE(SUM(input_tokens), 0) as input_tokens,
+                  COALESCE(SUM(output_tokens), 0) as output_tokens,
+                  COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens
+           FROM logs WHERE channel_id = ?""",
+        (channel_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        return dict(row) if row else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+async def get_user_token_usage(user_id: int) -> dict:
+    """Get total token usage for a user"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT COALESCE(SUM(input_tokens), 0) as input_tokens,
+                  COALESCE(SUM(output_tokens), 0) as output_tokens,
+                  COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
+                  COUNT(*) as request_count
+           FROM logs WHERE user_id = ?""",
+        (user_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        return dict(row) if row else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "request_count": 0}
+
+async def get_hourly_stats(days: int = 7):
+    """Get hourly request and token statistics"""
+    db = await get_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    
+    async with db.execute(
+        """SELECT 
+                strftime('%Y-%m-%d %H:00:00', created_at) as hour,
+                COUNT(*) as requests,
+                SUM(input_tokens) as input_tokens,
+                SUM(output_tokens) as output_tokens,
+                SUM(input_tokens + output_tokens) as total_tokens
+           FROM logs 
+           WHERE created_at >= ?
+           GROUP BY hour
+           ORDER BY hour""",
+        (since,)
+    ) as cursor:
+        return [dict(row) for row in await cursor.fetchall()]
+
+async def get_channel_stats():
+    """Get statistics for all channels"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT 
+                c.id,
+                c.name,
+                c.type,
+                c.enabled,
+                COUNT(DISTINCT a.id) as total_accounts,
+                COUNT(DISTINCT CASE WHEN a.enabled = 1 THEN a.id END) as active_accounts,
+                COALESCE(SUM(a.total_tokens), 0) as total_tokens
+           FROM channels c
+           LEFT JOIN accounts a ON c.id = a.channel_id
+           GROUP BY c.id
+           ORDER BY total_tokens DESC"""
+    ) as cursor:
+        return [dict(row) for row in await cursor.fetchall()]
+
+async def get_top_users(limit: int = 10):
+    """Get top users by token usage"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT 
+                id,
+                name,
+                total_tokens,
+                input_tokens,
+                output_tokens
+           FROM users
+           WHERE total_tokens > 0
+           ORDER BY total_tokens DESC
+           LIMIT ?""",
+        (limit,)
+    ) as cursor:
+        return [dict(row) for row in await cursor.fetchall()]

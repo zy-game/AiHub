@@ -1,0 +1,234 @@
+import json
+import uuid
+import time
+from .base import BaseConverter
+
+class OpenAIConverter(BaseConverter):
+    def __init__(self):
+        super().__init__("openai")
+    
+    def convert_request(self, data: dict, target_format: str) -> dict:
+        if target_format == "openai":
+            return data
+        elif target_format == "claude":
+            return self._to_claude_request(data)
+        elif target_format == "gemini":
+            return self._to_gemini_request(data)
+        return data
+    
+    def convert_response(self, data: dict, source_format: str) -> dict:
+        if source_format == "openai":
+            return data
+        elif source_format == "claude":
+            return self._from_claude_response(data)
+        elif source_format == "gemini":
+            return self._from_gemini_response(data)
+        return data
+    
+    def convert_stream_chunk(self, chunk: str, source_format: str) -> str:
+        if source_format == "openai":
+            return chunk
+        elif source_format == "claude":
+            return self._from_claude_stream(chunk)
+        elif source_format == "gemini":
+            return self._from_gemini_stream(chunk)
+        return chunk
+    
+    def _to_claude_request(self, data: dict) -> dict:
+        messages = data.get("messages", [])
+        claude_messages = []
+        system_content = ""
+        
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                system_content = content if isinstance(content, str) else json.dumps(content)
+            elif role == "assistant":
+                claude_messages.append({"role": "assistant", "content": content})
+            elif role == "tool":
+                claude_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": msg.get("tool_call_id", ""),
+                        "content": content
+                    }]
+                })
+            else:
+                claude_messages.append({"role": "user", "content": content})
+        
+        result = {
+            "model": data.get("model", ""),
+            "messages": claude_messages,
+            "max_tokens": data.get("max_tokens", 4096),
+        }
+        
+        if system_content:
+            result["system"] = system_content
+        if data.get("temperature") is not None:
+            result["temperature"] = data["temperature"]
+        if data.get("top_p") is not None:
+            result["top_p"] = data["top_p"]
+        if data.get("stream"):
+            result["stream"] = True
+        if data.get("tools"):
+            result["tools"] = self._convert_tools_to_claude(data["tools"])
+        
+        return result
+    
+    def _convert_tools_to_claude(self, tools: list) -> list:
+        claude_tools = []
+        for tool in tools:
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+                claude_tools.append({
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "input_schema": func.get("parameters", {})
+                })
+        return claude_tools
+    
+    def _to_gemini_request(self, data: dict) -> dict:
+        messages = data.get("messages", [])
+        contents = []
+        system_instruction = None
+        
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                system_instruction = {"parts": [{"text": content}]}
+            elif role == "assistant":
+                contents.append({"role": "model", "parts": [{"text": content}]})
+            else:
+                contents.append({"role": "user", "parts": [{"text": content}]})
+        
+        result = {
+            "contents": contents,
+            "generationConfig": {
+                "maxOutputTokens": data.get("max_tokens", 4096),
+            }
+        }
+        
+        if system_instruction:
+            result["systemInstruction"] = system_instruction
+        if data.get("temperature") is not None:
+            result["generationConfig"]["temperature"] = data["temperature"]
+        if data.get("top_p") is not None:
+            result["generationConfig"]["topP"] = data["top_p"]
+        
+        return result
+    
+    def _from_claude_response(self, data: dict) -> dict:
+        content = ""
+        tool_calls = []
+        
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                content += block.get("text", "")
+            elif block.get("type") == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {}))
+                    }
+                })
+        
+        message = {"role": "assistant", "content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        
+        return {
+            "id": f"chatcmpl-{data.get('id', '')}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": data.get("model", ""),
+            "choices": [{
+                "index": 0,
+                "message": message,
+                "finish_reason": self._map_stop_reason(data.get("stop_reason"))
+            }],
+            "usage": {
+                "prompt_tokens": data.get("usage", {}).get("input_tokens", 0),
+                "completion_tokens": data.get("usage", {}).get("output_tokens", 0),
+                "total_tokens": data.get("usage", {}).get("input_tokens", 0) + data.get("usage", {}).get("output_tokens", 0)
+            }
+        }
+    
+    def _from_gemini_response(self, data: dict) -> dict:
+        content = ""
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            for part in parts:
+                content += part.get("text", "")
+        
+        usage = data.get("usageMetadata", {})
+        
+        return {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": data.get("modelVersion", ""),
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": usage.get("promptTokenCount", 0),
+                "completion_tokens": usage.get("candidatesTokenCount", 0),
+                "total_tokens": usage.get("totalTokenCount", 0)
+            }
+        }
+    
+    def _from_claude_stream(self, chunk: str) -> str:
+        if not chunk.startswith("data: "):
+            return ""
+        
+        data_str = chunk[6:].strip()
+        if data_str == "[DONE]":
+            return "data: [DONE]\n\n"
+        
+        try:
+            data = json.loads(data_str)
+            event_type = data.get("type", "")
+            
+            if event_type == "content_block_delta":
+                delta = data.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    text = delta.get("text", "")
+                    return f'data: {json.dumps({"id": "chatcmpl-stream", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})}\n\n'
+            elif event_type == "message_stop":
+                return "data: [DONE]\n\n"
+        except:
+            pass
+        return ""
+    
+    def _from_gemini_stream(self, chunk: str) -> str:
+        try:
+            data = json.loads(chunk)
+            candidates = data.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                for part in parts:
+                    text = part.get("text", "")
+                    if text:
+                        return f'data: {json.dumps({"id": "chatcmpl-stream", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})}\n\n'
+        except:
+            pass
+        return ""
+    
+    def _map_stop_reason(self, reason: str) -> str:
+        mapping = {
+            "end_turn": "stop",
+            "stop_sequence": "stop",
+            "max_tokens": "length",
+            "tool_use": "tool_calls"
+        }
+        return mapping.get(reason, "stop")

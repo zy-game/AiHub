@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AiHub 管理面板</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="logo">
+            <span>AiHub</span>
+            <button class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
+        </div>
+        <ul class="nav-menu">
+            <li><a href="#" data-page="dashboard" class="active">仪表盘</a></li>
+            <li><a href="#" data-page="channels">渠道</a></li>
+            <li><a href="#" data-page="accounts">账号</a></li>
+            <li><a href="#" data-page="users">用户</a></li>
+            <li><a href="#" data-page="logs">日志</a></li>
+        </ul>
+    </nav>
+    
+    <main class="content">
+        <!-- Dashboard -->
+        <section id="page-dashboard" class="page active">
+            <div class="page-header"><h1>仪表盘</h1></div>
+            <div class="stats-grid">
+                <div class="stat-card"><h3>总请求数</h3><p id="stat-requests">-</p></div>
+                <div class="stat-card"><h3>总Token数</h3><p id="stat-tokens">-</p></div>
+                <div class="stat-card"><h3>平均耗时</h3><p id="stat-duration">-</p></div>
+                <div class="stat-card"><h3>错误率</h3><p id="stat-errors">-</p></div>
+            </div>
+            
+            <h2>渠道统计</h2>
+            <div class="table-container">
+                <table id="channel-stats">
+                    <thead><tr><th>渠道</th><th>类型</th><th>账号数</th><th>活跃账号</th><th>Token消耗</th><th>状态</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <h2>请求趋势</h2>
+            <div class="chart-container">
+                <canvas id="requests-chart"></canvas>
+            </div>
+            
+            <h2>Token趋势</h2>
+            <div class="chart-container">
+                <canvas id="tokens-chart"></canvas>
+            </div>
+            
+            <h2>模型使用统计</h2>
+            <div class="table-container">
+                <table id="model-stats">
+                    <thead><tr><th>模型</th><th>请求数</th><th>Token数</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <h2>Top 用户</h2>
+            <div class="table-container">
+                <table id="top-users">
+                    <thead><tr><th>用户</th><th>输入Token</th><th>输出Token</th><th>总Token</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+        
+        <!-- Channels -->
+        <section id="page-channels" class="page">
+            <div class="page-header">
+                <h1>渠道管理</h1>
+                <div class="btn-group">
+                    <button class="btn" onclick="refreshAllUsage()">刷新用量</button>
+                    <button class="btn btn-primary" onclick="showChannelModal()">+ 添加渠道</button>
+                </div>
+            </div>
+            <div id="channels-grid" class="card-grid"></div>
+        </section>
+        
+        <!-- Accounts (All) -->
+        <section id="page-accounts" class="page">
+            <div class="page-header">
+                <h1>所有账号</h1>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="showAccountModalWithChannel()">+ 添加账号</button>
+                    <button class="btn" onclick="refreshAllUsage()">刷新用量</button>
+                </div>
+            </div>
+            <div id="accounts-all-grid" class="card-grid"></div>
+        </section>
+
+        <!-- Channel Accounts -->
+        <section id="page-channel-accounts" class="page">
+            <div class="page-header">
+                <h1>账号管理 - <span id="accounts-channel-name"></span></h1>
+                <div class="btn-group">
+                    <button class="btn" onclick="showChannelsPage()">返回</button>
+                    <button class="btn" onclick="refreshCurrentChannelUsage()" id="btn-refresh-channel">刷新用量</button>
+                    <button class="btn btn-primary" onclick="showAccountModal()">+ 添加</button>
+                    <button class="btn btn-primary" onclick="showImportModal()">导入</button>
+                    <button class="btn btn-danger" onclick="clearAllAccounts()">清空全部</button>
+                </div>
+            </div>
+            <div id="accounts-grid" class="card-grid"></div>
+        </section>
+        
+        <!-- Users -->
+        <section id="page-users" class="page">
+            <div class="page-header">
+                <h1>用户管理</h1>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="showUserModal()">+ 添加用户</button>
+                </div>
+            </div>
+            <div id="users-grid" class="card-grid"></div>
+        </section>
+        
+        <!-- Logs -->
+        <section id="page-logs" class="page">
+            <div class="page-header"><h1>请求日志</h1></div>
+            <div class="table-container">
+                <table id="logs-table">
+                    <thead>
+                        <tr><th>时间</th><th>用户</th><th>渠道</th><th>模型</th><th>Token数</th><th>耗时</th><th>状态</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div style="margin-top: 16px;"><button class="btn" onclick="loadMoreLogs()">加载更多</button></div>
+        </section>
+    </main>
+    
+    <!-- Channel Modal -->
+    <div id="channel-modal" class="modal">
+        <div class="modal-content">
+            <h2 id="channel-modal-title">添加渠道</h2>
+            <form id="channel-form">
+                <input type="hidden" id="channel-id">
+                <div class="form-group">
+                    <label>名称</label>
+                    <input type="text" id="channel-name" required placeholder="我的渠道">
+                </div>
+                <div class="form-group">
+                    <label>类型</label>
+                    <select id="channel-type" required>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="google">Google</option>
+                        <option value="kiro">Kiro</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>模型列表（逗号分隔）</label>
+                    <input type="text" id="channel-models" required placeholder="gpt-4o, gpt-4o-mini">
+                </div>
+                <div class="form-group">
+                    <label>优先级</label>
+                    <input type="number" id="channel-priority" value="0">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeModal('channel-modal')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Account Modal -->
+    <div id="account-modal" class="modal">
+        <div class="modal-content">
+            <h2>添加账号</h2>
+            <form id="account-form">
+                <div class="form-group" id="account-channel-group" style="display:none;">
+                    <label>选择渠道</label>
+                    <select id="account-channel-select" required>
+                        <option value="">请选择渠道</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>名称（可选）</label>
+                    <input type="text" id="account-name" placeholder="账号名称">
+                </div>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="text" id="account-api-key" required placeholder="sk-...">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeModal('account-modal')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Import Modal -->
+    <div id="import-modal" class="modal">
+        <div class="modal-content">
+            <h2>导入账号</h2>
+            <form id="import-form">
+                <div id="import-standard" class="import-section">
+                    <div class="form-group">
+                        <label>API Keys（每行一个）</label>
+                        <textarea id="import-keys" rows="6" placeholder="sk-xxx&#10;sk-yyy"></textarea>
+                    </div>
+                </div>
+                <div id="import-kiro" class="import-section" style="display:none;">
+                    <div class="import-tabs">
+                        <button type="button" class="tab-btn active" onclick="switchImportTab('file')">文件</button>
+                        <button type="button" class="tab-btn" onclick="switchImportTab('json')">JSON</button>
+                        <button type="button" class="tab-btn" onclick="switchImportTab('login')">登录</button>
+                    </div>
+                    <div id="import-tab-file" class="import-tab-content">
+                        <div class="form-group">
+                            <label>上传 Kiro 配置文件</label>
+                            <input type="file" id="import-file" accept=".json">
+                        </div>
+                    </div>
+                    <div id="import-tab-json" class="import-tab-content" style="display:none;">
+                        <div class="form-group">
+                            <label>粘贴 JSON</label>
+                            <textarea id="import-kiro-json" rows="8" placeholder='[{"refreshToken":"..."}]'></textarea>
+                        </div>
+                    </div>
+                    <div id="import-tab-login" class="import-tab-content" style="display:none;">
+                        <p class="help-text">使用 AWS Builder ID 登录</p>
+                        <button type="button" class="btn btn-primary" onclick="startKiroLogin()">登录</button>
+                        <div id="kiro-login-status" style="display:none; margin-top: 12px;">
+                            <p>验证码：<strong id="kiro-login-code"></strong></p>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeModal('import-modal')">取消</button>
+                    <button type="submit" class="btn btn-primary">导入</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- User Modal -->
+    <div id="user-modal" class="modal">
+        <div class="modal-content">
+            <h2 id="user-modal-title">添加用户</h2>
+            <form id="user-form">
+                <input type="hidden" id="user-id">
+                <div class="form-group">
+                    <label>名称</label>
+                    <input type="text" id="user-name" placeholder="用户名称">
+                </div>
+                <div class="form-group">
+                    <label>配额（-1 = 无限制）</label>
+                    <input type="number" id="user-quota" value="-1">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeModal('user-modal')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script src="/static/js/chart.min.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
