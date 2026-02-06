@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>风控系统管理 - AiHub</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css?v=20260206">
+    <link rel="stylesheet" href="/static/css/risk-control.css?v=20260206">
+    <style>
+        /* 确保内容可见 */
+        body { background: #f5f5f5; }
+        .dark body { background: #1a1a1a; }
+        .content { 
+            margin-left: 280px; 
+            padding: 2rem;
+            min-height: 100vh;
+        }
+        .page { display: none; }
+        .page.active { display: block; }
+        .card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .dark .card { background: #2a2a2a; }
+    </style>
+</head>
+<body>
+    <div style="position: fixed; top: 10px; right: 10px; background: red; color: white; padding: 10px; z-index: 9999;" id="debug-info">
+        页面已加载
+    </div>
+    <nav class="sidebar">
+        <div class="logo">
+            <span>AiHub 风控</span>
+            <button class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
+        </div>
+        <ul class="nav-menu">
+            <li><a href="/" class="nav-link">← 返回主页</a></li>
+            <li><a href="#" data-page="overview" class="active">系统概览</a></li>
+            <li><a href="#" data-page="proxy-pool">代理池管理</a></li>
+            <li><a href="#" data-page="health-monitor">账号健康</a></li>
+            <li><a href="#" data-page="rate-limit">速率限制</a></li>
+            <li><a href="#" data-page="config">系统配置</a></li>
+        </ul>
+        
+        <div class="user-info">
+            <div class="user-avatar" id="user-avatar">
+                <span id="user-avatar-text">A</span>
+            </div>
+            <div class="user-details">
+                <div class="user-email" id="user-email">加载中...</div>
+                <div class="user-role" id="current-user-role"></div>
+            </div>
+            <button class="btn-logout" onclick="logout()" title="退出登录">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                    <polyline points="16 17 21 12 16 7"></polyline>
+                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                </svg>
+            </button>
+        </div>
+    </nav>
+    
+    <main class="content">
+        <!-- 系统概览 -->
+        <section id="page-overview" class="page active">
+            <div class="page-header">
+                <h1>🛡️ 风控系统概览</h1>
+                <button class="btn btn-primary" onclick="refreshOverview()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                    刷新
+                </button>
+            </div>
+            
+            <!-- 系统状态卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card status-card">
+                    <div class="stat-icon">🌐</div>
+                    <div class="stat-content">
+                        <h3>代理池</h3>
+                        <p class="stat-value" id="overview-proxy-status">-</p>
+                        <p class="stat-label" id="overview-proxy-detail">-</p>
+                    </div>
+                </div>
+                
+                <div class="stat-card status-card">
+                    <div class="stat-icon">💊</div>
+                    <div class="stat-content">
+                        <h3>账号健康</h3>
+                        <p class="stat-value" id="overview-health-status">-</p>
+                        <p class="stat-label" id="overview-health-detail">-</p>
+                    </div>
+                </div>
+                
+                <div class="stat-card status-card">
+                    <div class="stat-icon">⏱️</div>
+                    <div class="stat-content">
+                        <h3>速率限制</h3>
+                        <p class="stat-value" id="overview-rate-status">-</p>
+                        <p class="stat-label" id="overview-rate-detail">-</p>
+                    </div>
+                </div>
+                
+                <div class="stat-card status-card">
+                    <div class="stat-icon">🎭</div>
+                    <div class="stat-content">
+                        <h3>指纹伪装</h3>
+                        <p class="stat-value" id="overview-fingerprint-status">-</p>
+                        <p class="stat-label">50+ 浏览器指纹</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 健康监控摘要 -->
+            <div class="card">
+                <h2>账号健康摘要</h2>
+                <div class="health-summary" id="health-summary">
+                    <div class="health-item">
+                        <span class="health-label">健康</span>
+                        <span class="health-value healthy" id="summary-healthy">0</span>
+                    </div>
+                    <div class="health-item">
+                        <span class="health-label">降级</span>
+                        <span class="health-value degraded" id="summary-degraded">0</span>
+                    </div>
+                    <div class="health-item">
+                        <span class="health-label">不健康</span>
+                        <span class="health-value unhealthy" id="summary-unhealthy">0</span>
+                    </div>
+                    <div class="health-item">
+                        <span class="health-label">已封禁</span>
+                        <span class="health-value banned" id="summary-banned">0</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 代理池摘要 -->
+            <div class="card">
+                <h2>代理池摘要</h2>
+                <div class="table-container">
+                    <table id="proxy-summary-table">
+                        <thead>
+                            <tr>
+                                <th>代理地址</th>
+                                <th>国家/地区</th>
+                                <th>状态</th>
+                                <th>总请求</th>
+                                <th>成功率</th>
+                                <th>平均响应</th>
+                                <th>绑定账号</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        
+        <!-- 代理池管理 -->
+        <section id="page-proxy-pool" class="page">
+            <div class="page-header">
+                <h1>🌐 代理池管理</h1>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="showAddProxyModal()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        添加代理
+                    </button>
+                    <button class="btn btn-secondary" onclick="healthCheckProxies()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                        </svg>
+                        健康检查
+                    </button>
+                    <button class="btn btn-secondary" onclick="refreshProxyPool()">刷新</button>
+                </div>
+            </div>
+            
+            <!-- 代理池统计 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>总代理数</h3>
+                    <p id="proxy-total">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>存活代理</h3>
+                    <p id="proxy-alive">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>失效代理</h3>
+                    <p id="proxy-dead">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>绑定策略</h3>
+                    <p id="proxy-strategy">-</p>
+                </div>
+            </div>
+            
+            <!-- 代理列表 -->
+            <div class="card">
+                <h2>代理列表</h2>
+                <div class="table-container">
+                    <table id="proxy-list-table">
+                        <thead>
+                            <tr>
+                                <th>代理地址</th>
+                                <th>协议</th>
+                                <th>国家/地区</th>
+                                <th>ISP</th>
+                                <th>状态</th>
+                                <th>总请求</th>
+                                <th>成功率</th>
+                                <th>平均响应</th>
+                                <th>绑定账号数</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        
+        <!-- 账号健康监控 -->
+        <section id="page-health-monitor" class="page">
+            <div class="page-header">
+                <h1>💊 账号健康监控</h1>
+                <button class="btn btn-secondary" onclick="refreshHealthMonitor()">刷新</button>
+            </div>
+            
+            <!-- 健康统计 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>总账号数</h3>
+                    <p id="health-total">0</p>
+                </div>
+                <div class="stat-card stat-healthy">
+                    <h3>健康账号</h3>
+                    <p id="health-healthy">0</p>
+                </div>
+                <div class="stat-card stat-degraded">
+                    <h3>降级账号</h3>
+                    <p id="health-degraded">0</p>
+                </div>
+                <div class="stat-card stat-banned">
+                    <h3>封禁账号</h3>
+                    <p id="health-banned">0</p>
+                </div>
+            </div>
+            
+            <!-- 账号列表 -->
+            <div class="card">
+                <h2>账号健康详情</h2>
+                <div class="table-container">
+                    <table id="health-list-table">
+                        <thead>
+                            <tr>
+                                <th>账号ID</th>
+                                <th>状态</th>
+                                <th>风险等级</th>
+                                <th>成功率</th>
+                                <th>近期失败率</th>
+                                <th>总请求</th>
+                                <th>失败请求</th>
+                                <th>连续失败</th>
+                                <th>速率限制</th>
+                                <th>认证错误</th>
+                                <th>平均响应</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        
+        <!-- 速率限制 -->
+        <section id="page-rate-limit" class="page">
+            <div class="page-header">
+                <h1>⏱️ 速率限制统计</h1>
+                <button class="btn btn-secondary" onclick="refreshRateLimit()">刷新</button>
+            </div>
+            
+            <!-- 全局限制 -->
+            <div class="card" id="global-rate-limit">
+                <h2>全局速率限制</h2>
+                <div class="rate-limit-info">
+                    <div class="rate-item">
+                        <span class="rate-label">最近1分钟请求数</span>
+                        <span class="rate-value" id="global-requests">-</span>
+                    </div>
+                    <div class="rate-item">
+                        <span class="rate-label">最近1分钟Token数</span>
+                        <span class="rate-value" id="global-tokens">-</span>
+                    </div>
+                    <div class="rate-item">
+                        <span class="rate-label">可用请求令牌</span>
+                        <span class="rate-value" id="global-available-requests">-</span>
+                    </div>
+                    <div class="rate-item">
+                        <span class="rate-label">可用Token配额</span>
+                        <span class="rate-value" id="global-available-tokens">-</span>
+                    </div>
+                    <div class="rate-item">
+                        <span class="rate-label">RPM限制</span>
+                        <span class="rate-value" id="global-rpm-limit">-</span>
+                    </div>
+                    <div class="rate-item">
+                        <span class="rate-label">TPM限制</span>
+                        <span class="rate-value" id="global-tpm-limit">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 账号级限制 -->
+            <div class="card">
+                <h2>账号级速率限制</h2>
+                <div class="table-container">
+                    <table id="account-rate-limit-table">
+                        <thead>
+                            <tr>
+                                <th>账号ID</th>
+                                <th>最近1分钟请求</th>
+                                <th>最近1分钟Token</th>
+                                <th>可用请求令牌</th>
+                                <th>可用Token配额</th>
+                                <th>RPM限制</th>
+                                <th>TPM限制</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        
+        <!-- 系统配置 -->
+        <section id="page-config" class="page">
+            <div class="page-header">
+                <h1>⚙️ 系统配置</h1>
+                <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+            </div>
+            
+            <div class="config-notice">
+                <strong>⚠️ 注意：</strong>配置修改后需要重启服务才能生效。建议先在测试环境验证配置。
+            </div>
+            
+            <!-- 代理池配置 -->
+            <div class="card">
+                <h2>代理池配置</h2>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="config-proxy-enabled"> 启用代理池
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>绑定策略</label>
+                    <select id="config-proxy-strategy">
+                        <option value="sticky">STICKY - 账号绑定固定代理（推荐）</option>
+                        <option value="random">RANDOM - 随机选择</option>
+                        <option value="round_robin">ROUND_ROBIN - 轮询</option>
+                        <option value="least_used">LEAST_USED - 最少使用</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="config-proxy-health-check"> 自动健康检查
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>健康检查间隔（秒）</label>
+                    <input type="number" id="config-proxy-interval" value="300" min="60">
+                </div>
+            </div>
+            
+            <!-- 速率限制配置 -->
+            <div class="card">
+                <h2>速率限制配置</h2>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="config-rate-enabled"> 启用速率限制
+                    </label>
+                </div>
+                
+                <h3>全局限制</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>RPM（每分钟请求数）</label>
+                        <input type="number" id="config-global-rpm" value="1000" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label>TPM（每分钟Token数）</label>
+                        <input type="number" id="config-global-tpm" value="1000000" min="1">
+                    </div>
+                </div>
+                
+                <h3>账号级限制</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>RPM</label>
+                        <input type="number" id="config-account-rpm" value="60" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label>TPM</label>
+                        <input type="number" id="config-account-tpm" value="90000" min="1">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 指纹伪装配置 -->
+            <div class="card">
+                <h2>指纹伪装配置</h2>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="config-fingerprint-enabled"> 启用指纹伪装
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="config-fingerprint-sticky"> 账号绑定固定指纹（推荐）
+                    </label>
+                </div>
+            </div>
+            
+            <!-- 健康监控配置 -->
+            <div class="card">
+                <h2>健康监控配置</h2>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="config-health-enabled"> 启用健康监控
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="config-health-recovery"> 自动恢复
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>检查间隔（秒）</label>
+                    <input type="number" id="config-health-interval" value="60" min="10">
+                </div>
+            </div>
+            
+            <div class="form-actions">
+                <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+                <button class="btn btn-secondary" onclick="loadConfig()">重新加载</button>
+            </div>
+        </section>
+    </main>
+    
+    <!-- 添加代理模态框 -->
+    <div id="add-proxy-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>添加代理</h2>
+                <button class="modal-close" onclick="closeAddProxyModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>代理地址 *</label>
+                    <input type="text" id="proxy-host" placeholder="proxy.example.com">
+                </div>
+                <div class="form-group">
+                    <label>端口 *</label>
+                    <input type="number" id="proxy-port" placeholder="8080" min="1" max="65535">
+                </div>
+                <div class="form-group">
+                    <label>协议</label>
+                    <select id="proxy-protocol">
+                        <option value="http">HTTP</option>
+                        <option value="https">HTTPS</option>
+                        <option value="socks5">SOCKS5</option>
+                        <option value="socks4">SOCKS4</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="proxy-username" placeholder="可选">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="proxy-password" placeholder="可选">
+                </div>
+                <div class="form-group">
+                    <label>国家</label>
+                    <input type="text" id="proxy-country" placeholder="US">
+                </div>
+                <div class="form-group">
+                    <label>地区</label>
+                    <input type="text" id="proxy-region" placeholder="California">
+                </div>
+                <div class="form-group">
+                    <label>ISP</label>
+                    <input type="text" id="proxy-isp" placeholder="Residential ISP">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeAddProxyModal()">取消</button>
+                <button class="btn btn-primary" onclick="addProxy()">添加</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/static/js/risk-control.js?v=20260206-002"></script>
+    <script>
+        console.log('=== INLINE SCRIPT LOADED ===');
+        console.log('Page URL:', window.location.href);
+        console.log('Document ready state:', document.readyState);
+        
+        // 确保DOM加载完成
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log('DOM Content Loaded');
+            });
+        } else {
+            console.log('DOM already loaded');
+        }
+    </script>
+</body>
+</html>

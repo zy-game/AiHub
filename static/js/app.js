@@ -85,14 +85,32 @@ function getTypeBadge(t) {
 
 // Navigation
 document.querySelectorAll('.nav-menu a').forEach(link => {
-    link.addEventListener('click', e => { e.preventDefault(); const p = link.dataset.page; showPage(p); loadPageData(p); });
+    link.addEventListener('click', e => {
+        // Skip external links
+        if (link.classList.contains('nav-link-external')) {
+            return; // Let the default behavior happen
+        }
+        
+        e.preventDefault();
+        const p = link.dataset.page;
+        if (p) {
+            showPage(p);
+            loadPageData(p);
+        }
+    });
 });
 
 function showPage(page) {
     document.querySelectorAll('.nav-menu a').forEach(l => l.classList.remove('active'));
-    document.querySelector(`.nav-menu a[data-page="${page}"]`)?.classList.add('active');
+    const navLink = document.querySelector(`.nav-menu a[data-page="${page}"]`);
+    if (navLink) {
+        navLink.classList.add('active');
+    }
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById(`page-${page}`).classList.add('active');
+    const pageElement = document.getElementById(`page-${page}`);
+    if (pageElement) {
+        pageElement.classList.add('active');
+    }
 }
 
 function loadPageData(page) {
@@ -1204,6 +1222,14 @@ function applyPermissions(user) {
     // Store permissions globally for later use
     window.userPermissions = permissions;
     window.userRole = role;
+    
+    // Show risk control menu for super_admin
+    if (role === 'super_admin') {
+        const riskControlMenu = document.getElementById('risk-control-menu');
+        if (riskControlMenu) {
+            riskControlMenu.style.display = 'block';
+        }
+    }
 }
 
 // Logout

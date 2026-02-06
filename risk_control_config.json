@@ -1,0 +1,80 @@
+{
+  "risk_control": {
+    "enabled": true,
+    "description": "完整的风控防护系统配置"
+  },
+  
+  "proxy_pool": {
+    "enabled": false,
+    "strategy": "sticky",
+    "auto_health_check": true,
+    "health_check_interval": 300,
+    "proxies": [
+      {
+        "host": "proxy1.example.com",
+        "port": 8080,
+        "protocol": "http",
+        "username": "user1",
+        "password": "pass1",
+        "country": "US",
+        "region": "California",
+        "isp": "Residential ISP"
+      },
+      {
+        "host": "proxy2.example.com",
+        "port": 8080,
+        "protocol": "socks5",
+        "username": "user2",
+        "password": "pass2",
+        "country": "UK",
+        "region": "London",
+        "isp": "Residential ISP"
+      }
+    ]
+  },
+  
+  "rate_limit": {
+    "enabled": true,
+    "global": {
+      "requests_per_minute": 1000,
+      "tokens_per_minute": 1000000,
+      "burst_size": 50,
+      "min_interval": 0.1
+    },
+    "account": {
+      "requests_per_minute": 60,
+      "tokens_per_minute": 90000,
+      "burst_size": 10,
+      "min_interval": 0.5
+    },
+    "user": {
+      "requests_per_minute": 100,
+      "tokens_per_minute": 150000,
+      "burst_size": 20,
+      "min_interval": 0.3
+    }
+  },
+  
+  "fingerprint": {
+    "enabled": true,
+    "sticky_fingerprint": true,
+    "auto_rotate_interval": 0
+  },
+  
+  "health_monitor": {
+    "enabled": true,
+    "auto_recovery": true,
+    "check_interval": 60,
+    "thresholds": {
+      "consecutive_failures_unhealthy": 10,
+      "consecutive_rate_limits_degrade": 5,
+      "auth_errors_ban": 3,
+      "recent_failure_rate_high": 0.5,
+      "recent_failure_rate_medium": 0.3
+    },
+    "penalties": {
+      "degrade_duration": 3600,
+      "ban_duration": 86400
+    }
+  }
+}

@@ -29,6 +29,11 @@ from server.api import (
     api_refresh_account_usage,
     api_health_check_all
 )
+from server.api_risk_control import (
+    api_risk_control_status, api_proxy_pool_stats, api_add_proxy, api_proxy_health_check,
+    api_rate_limit_stats, api_health_monitor_stats, api_account_health_detail,
+    api_account_manual_degrade, api_account_manual_ban, api_account_recover
+)
 from server.tasks import start_background_tasks
 from utils.logger import logger
 from config import HOST, PORT
@@ -38,10 +43,27 @@ async def on_startup(app: web.Application):
     logger.info("Database connected")
     await init_auth_system()  # Initialize super admin and invite code
     logger.info("Authentication system initialized")
+    
+    # Initialize risk control system
+    from utils.risk_control import init_risk_control
+    try:
+        await init_risk_control()
+        logger.info("Risk control system initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize risk control system: {e}")
+    
     await start_background_tasks()
     logger.info("Background tasks started")
 
 async def on_cleanup(app: web.Application):
+    # Shutdown risk control system
+    from utils.risk_control import get_risk_control_system
+    try:
+        system = get_risk_control_system()
+        await system.shutdown()
+    except Exception as e:
+        logger.warning(f"Error shutting down risk control system: {e}")
+    
     await close_db()
     logger.info("Database closed")
 
@@ -133,8 +155,25 @@ def create_app() -> web.Application:
     # Health check routes
     app.router.add_post("/api/health-check-all", api_health_check_all)
     
-    # Static files
+    # Risk Control API routes (NEW)
+    app.router.add_get("/api/risk-control/status", api_risk_control_status)
+    app.router.add_get("/api/risk-control/proxy-pool/stats", api_proxy_pool_stats)
+    app.router.add_post("/api/risk-control/proxy-pool/add", api_add_proxy)
+    app.router.add_post("/api/risk-control/proxy-pool/health-check", api_proxy_health_check)
+    app.router.add_get("/api/risk-control/rate-limit/stats", api_rate_limit_stats)
+    app.router.add_get("/api/risk-control/health-monitor/stats", api_health_monitor_stats)
+    app.router.add_get("/api/risk-control/accounts/{id}/health", api_account_health_detail)
+    app.router.add_post("/api/risk-control/accounts/{id}/degrade", api_account_manual_degrade)
+    app.router.add_post("/api/risk-control/accounts/{id}/ban", api_account_manual_ban)
+    app.router.add_post("/api/risk-control/accounts/{id}/recover", api_account_recover)
+    
+    # Static files path (must be defined before use)
     static_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+    
+    # Risk Control Management Page (super_admin only)
+    app.router.add_get("/risk-control", lambda r: web.FileResponse(os.path.join(static_path, "risk-control.html")))
+    
+    # Static files
     app.router.add_static("/static", static_path)
     app.router.add_get("/", lambda r: web.FileResponse(os.path.join(static_path, "index.html")))
     

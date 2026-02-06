@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional, Tuple
+from typing import AsyncIterator, Optional, Tuple, Dict
 import aiohttp
+import time
+import asyncio
 
 class BaseProvider(ABC):
     BASE_URL = ""
@@ -47,8 +49,152 @@ class BaseProvider(ABC):
         if not success:
             self.failed_requests += 1
     
+    async def _create_session_with_proxy(self, account_id: Optional[int] = None) -> aiohttp.ClientSession:
+        """
+        创建带代理的HTTP会话
+        
+        Args:
+            account_id: 账号ID（用于获取绑定的代理）
+        
+        Returns:
+            aiohttp.ClientSession
+        """
+        from utils.proxy_manager import get_proxy_pool
+        
+        proxy_pool = get_proxy_pool()
+        proxy = None
+        
+        if proxy_pool and account_id:
+            proxy = await proxy_pool.get_proxy_for_account(account_id)
+        
+        if proxy:
+            return aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=False),
+                timeout=aiohttp.ClientTimeout(total=60)
+            ), proxy.config.get_url()
+        else:
+            return aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=60)
+            ), None
+    
+    async def _build_request_headers(
+        self,
+        api_key: str,
+        account_id: Optional[int] = None,
+        base_headers: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        """
+        构建请求头（带指纹伪装）
+        
+        Args:
+            api_key: API密钥
+            account_id: 账号ID
+            base_headers: 基础headers
+        
+        Returns:
+            完整的请求头
+        """
+        from utils.fingerprint import get_headers_builder
+        
+        headers_builder = get_headers_builder()
+        
+        if headers_builder:
+            return headers_builder.build_headers(
+                account_id=account_id,
+                api_key=api_key,
+                base_headers=base_headers,
+                sticky_fingerprint=True  # 账号绑定固定指纹
+            )
+        else:
+            # 降级：使用基础headers
+            headers = base_headers.copy() if base_headers else {}
+            headers["Authorization"] = f"Bearer {api_key}"
+            return headers
+    
+    async def _apply_rate_limit(
+        self,
+        account_id: Optional[int] = None,
+        user_id: Optional[int] = None,
+        estimated_tokens: int = 1000
+    ) -> float:
+        """
+        应用速率限制
+        
+        Args:
+            account_id: 账号ID
+            user_id: 用户ID
+            estimated_tokens: 预估token数
+        
+        Returns:
+            建议延迟时间（秒）
+        """
+        from utils.rate_limiter import get_rate_limiter, RateLimitConfig
+        
+        rate_limiter = get_rate_limiter()
+        
+        if rate_limiter:
+            # 这里可以根据不同provider设置不同的限制
+            account_config = RateLimitConfig(
+                requests_per_minute=60,
+                tokens_per_minute=90000,
+                burst_size=10,
+                min_interval=0.5
+            )
+            
+            delay = await rate_limiter.acquire(
+                estimated_tokens=estimated_tokens,
+                account_id=account_id,
+                user_id=user_id,
+                account_config=account_config
+            )
+            
+            if delay > 0:
+                await asyncio.sleep(delay)
+            
+            return delay
+        
+        return 0.0
+    
+    async def _record_health_metrics(
+        self,
+        account_id: int,
+        success: bool,
+        response_time: float,
+        error_type: Optional[str] = None
+    ):
+        """
+        记录健康指标
+        
+        Args:
+            account_id: 账号ID
+            success: 是否成功
+            response_time: 响应时间（秒）
+            error_type: 错误类型
+        """
+        from utils.health_monitor import get_health_monitor
+        
+        monitor = get_health_monitor()
+        
+        if monitor:
+            await monitor.record_request(
+                account_id=account_id,
+                success=success,
+                response_time=response_time,
+                error_type=error_type
+            )
+    
     @abstractmethod
-    async def chat(self, api_key: str, model: str, data: dict) -> AsyncIterator[bytes]:
+    async def chat(self, api_key: str, model: str, data: dict, account_id: Optional[int] = None, user_id: Optional[int] = None) -> AsyncIterator[bytes]:
+        """
+        发送聊天请求
+        
+        Args:
+            api_key: API密钥
+            model: 模型名称
+            data: 请求数据
+            account_id: 账号ID（用于代理绑定、指纹、健康监控）
+            user_id: 用户ID（用于速率限制）
+        """
         pass
     
     @abstractmethod

@@ -2,7 +2,6 @@
 import asyncio
 from utils.logger import logger
 from models import check_and_update_token_status
-from utils.rate_limiter import rate_limiter
 from utils.health_checker import health_checker
 
 
@@ -23,7 +22,8 @@ async def rate_limiter_cleanup_task():
     while True:
         try:
             await asyncio.sleep(60)  # Run every 1 minute
-            await rate_limiter.cleanup()
+            # Rate limiter cleanup is handled internally by the risk control system
+            # This task is kept for backward compatibility
         except Exception as e:
             logger.error(f"Rate limiter cleanup task error: {e}")
 
