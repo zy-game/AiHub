@@ -1,6 +1,6 @@
 import json
 from aiohttp import web
-from models import get_channel_by_model, Channel
+from providers import get_provider, get_all_providers
 from utils.logger import logger
 from utils.load_balancer import load_balancer
 
@@ -8,7 +8,8 @@ class RequestContext:
     def __init__(self):
         self.user = None
         self.token = None
-        self.channel: Channel = None
+        self.provider = None  # BaseProvider instance
+        self.provider_type: str = None  # Provider type name
         self.model: str = None
         self.input_format: str = None  # openai, claude, gemini
         self.body: dict = None
@@ -44,8 +45,8 @@ async def extract_model_from_request(request: web.Request) -> tuple[str, dict, s
     
     return model, body, input_format
 
-async def distribute(request: web.Request, ctx: RequestContext) -> Channel:
-    """Select appropriate channel based on model name using load balancer"""
+async def distribute(request: web.Request, ctx: RequestContext):
+    """Select appropriate provider based on model name using load balancer"""
     model, body, input_format = await extract_model_from_request(request)
     
     if not model:
@@ -58,31 +59,49 @@ async def distribute(request: web.Request, ctx: RequestContext) -> Channel:
     ctx.body = body
     ctx.input_format = input_format
     
-    # Use load balancer to select channel (weighted strategy by default)
-    channel = await load_balancer.select_channel(model, strategy="weighted")
+    # Get all providers that support this model
+    all_providers = get_all_providers()
     
-    if not channel:
-        # Provide more detailed error message
-        from models import get_all_channels
-        all_channels = await get_all_channels()
+    # Filter providers that support the model and are enabled
+    candidates = [
+        provider for provider in all_providers.values()
+        if provider.enabled and provider.supports_model(model)
+    ]
+    
+    if not candidates:
+        # Provide detailed error message
+        supporting_providers = [
+            p for p in all_providers.values()
+            if p.supports_model(model)
+        ]
         
-        # Check if any channel supports this model
-        supporting_channels = [c for c in all_channels if c.supports_model(model)]
-        
-        if not supporting_channels:
-            error_msg = f"No channel supports model: {model}"
+        if not supporting_providers:
+            error_msg = f"No provider supports model: {model}"
         else:
-            disabled_count = sum(1 for c in supporting_channels if not c.enabled)
-            if disabled_count == len(supporting_channels):
-                error_msg = f"All channels supporting model '{model}' are disabled. Please enable at least one channel."
+            disabled_count = sum(1 for p in supporting_providers if not p.enabled)
+            if disabled_count == len(supporting_providers):
+                error_msg = f"All providers supporting model '{model}' are disabled. Please enable at least one provider."
             else:
-                error_msg = f"No available channel for model: {model}. Channels may be disabled or have no healthy accounts."
+                error_msg = f"No available provider for model: {model}. Providers may be disabled or have no healthy accounts."
         
         raise web.HTTPServiceUnavailable(
             text=json.dumps({"error": {"message": error_msg, "type": "model_not_found"}}),
             content_type="application/json"
         )
     
-    ctx.channel = channel
+    # Sort by priority (descending) and weight (descending)
+    candidates.sort(key=lambda p: (p.priority, p.weight), reverse=True)
     
-    return channel
+    # Use load balancer to select from candidates (weighted selection)
+    selected_provider = load_balancer.select_provider(candidates)
+    
+    if not selected_provider:
+        raise web.HTTPServiceUnavailable(
+            text=json.dumps({"error": {"message": f"Failed to select provider for model: {model}", "type": "service_unavailable"}}),
+            content_type="application/json"
+        )
+    
+    ctx.provider = selected_provider
+    ctx.provider_type = selected_provider.name
+    
+    return selected_provider

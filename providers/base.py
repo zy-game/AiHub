@@ -5,8 +5,47 @@ import aiohttp
 class BaseProvider(ABC):
     BASE_URL = ""
     
+    # Default configuration values
+    DEFAULT_PRIORITY = 0
+    DEFAULT_WEIGHT = 1
+    DEFAULT_ENABLED = True
+    
     def __init__(self, name: str):
         self.name = name
+        self.priority = self.DEFAULT_PRIORITY
+        self.weight = self.DEFAULT_WEIGHT
+        self.enabled = self.DEFAULT_ENABLED
+        # Statistics (runtime only, not persisted)
+        self.avg_response_time = 0
+        self.total_requests = 0
+        self.failed_requests = 0
+    
+    def configure(self, priority=None, weight=None, enabled=None):
+        """Configure provider settings from config file or database"""
+        if priority is not None:
+            self.priority = priority
+        if weight is not None:
+            self.weight = weight
+        if enabled is not None:
+            self.enabled = enabled
+    
+    def get_success_rate(self) -> float:
+        """Get success rate (0-1)"""
+        if self.total_requests == 0:
+            return 1.0
+        return 1.0 - (self.failed_requests / self.total_requests)
+    
+    def update_stats(self, response_time_ms: int, success: bool = True):
+        """Update provider statistics"""
+        if self.total_requests == 0:
+            self.avg_response_time = response_time_ms
+        else:
+            # Exponential moving average
+            self.avg_response_time = int(0.9 * self.avg_response_time + 0.1 * response_time_ms)
+        
+        self.total_requests += 1
+        if not success:
+            self.failed_requests += 1
     
     @abstractmethod
     async def chat(self, api_key: str, model: str, data: dict) -> AsyncIterator[bytes]:

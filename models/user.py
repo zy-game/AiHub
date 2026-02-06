@@ -7,6 +7,8 @@ class User:
         self.id = row["id"]
         self.api_key = row["api_key"]
         self.name = row["name"]
+        self.email = row.get("email")
+        self.role = row.get("role", "user")
         self.quota = row["quota"]
         self.used_quota = row["used_quota"]
         self.input_tokens = row.get("input_tokens", 0) or 0

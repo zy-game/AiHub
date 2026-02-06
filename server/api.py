@@ -6,7 +6,11 @@ from datetime import datetime, timezone, timedelta
 from aiohttp import web
 from models import (
     get_all_channels, get_channel_by_id, create_channel, update_channel, delete_channel,
-    get_accounts_by_channel, get_all_accounts_with_channels, create_account, batch_create_accounts, update_account, delete_account, delete_accounts_by_channel, get_account_usage_totals,
+    get_accounts_by_channel, get_accounts_by_provider,
+    get_all_accounts_with_channels, get_all_accounts_with_providers,
+    create_account, batch_create_accounts, update_account, delete_account, 
+    delete_accounts_by_channel, delete_accounts_by_provider,
+    get_account_usage_totals,
     get_all_users, create_user, update_user, delete_user,
     get_logs, get_stats, get_model_stats, get_channel_token_usage, get_user_token_usage, get_hourly_stats, get_channel_stats, get_top_users
 )
@@ -89,12 +93,12 @@ async def api_delete_channel(request: web.Request) -> web.Response:
 
 # Account API
 async def api_list_all_accounts(request: web.Request) -> web.Response:
-    accounts = await get_all_accounts_with_channels()
+    accounts = await get_all_accounts_with_providers()
     result = []
     for row in accounts:
         result.append({
             "id": row["id"],
-            "channel_id": row["channel_id"],
+            "channel_id": row.get("provider_type") or row.get("channel_id", ""),  # Use provider_type as channel_id
             "channel_name": row.get("channel_name", ""),
             "channel_type": row.get("channel_type", ""),
             "name": row.get("name", ""),
@@ -220,6 +224,8 @@ async def api_list_users(request: web.Request) -> web.Response:
         "id": u.id,
         "api_key": u.api_key,
         "name": u.name,
+        "email": u.email or '',
+        "role": u.role or 'user',
         "quota": u.quota,
         "used_quota": u.used_quota,
         "enabled": u.enabled,
@@ -256,11 +262,28 @@ async def api_list_logs(request: web.Request) -> web.Response:
 
 async def api_get_stats(request: web.Request) -> web.Response:
     days = int(request.query.get("days", 7))
-    stats = await get_stats(days)
-    model_stats = await get_model_stats(days)
-    hourly_stats = await get_hourly_stats(days)
+    
+    # Get current user from request
+    current_user = request.get('current_user')
+    user_id = None
+    
+    # If not super_admin, filter by current user
+    if current_user and current_user.get('role') != 'super_admin':
+        user_id = current_user.get('id')
+    
+    # Get stats (filtered by user_id if not super_admin)
+    stats = await get_stats(days, user_id)
+    model_stats = await get_model_stats(days, user_id)
+    hourly_stats = await get_hourly_stats(days, user_id)
+    
+    # Channel stats - show for all users
     channel_stats = await get_channel_stats()
-    top_users = await get_top_users(10)
+    
+    # Top users - only for super_admin
+    if current_user and current_user.get('role') == 'super_admin':
+        top_users = await get_top_users(10)
+    else:
+        top_users = []
     
     return web.json_response({
         "overview": stats,
@@ -529,7 +552,7 @@ async def api_list_tokens(request: web.Request) -> web.Response:
             "model_limits_enabled": t.model_limits_enabled,
             "model_limits": t.model_limits,
             "ip_whitelist": t.ip_whitelist,
-            "group": t.group,
+            "group": t.group or "default",  # 添加默认值
             "input_tokens": t.input_tokens,
             "output_tokens": t.output_tokens,
             "total_tokens": t.total_tokens,

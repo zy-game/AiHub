@@ -24,33 +24,51 @@ async def get_logs(limit: int = 100, offset: int = 0):
     ) as cursor:
         return [dict(row) for row in await cursor.fetchall()]
 
-async def get_stats(days: int = 7):
+async def get_stats(days: int = 7, user_id: int = None):
     db = await get_db()
     since = (datetime.now() - timedelta(days=days)).isoformat()
     
-    async with db.execute(
-        """SELECT COUNT(*) as total_requests,
+    # Build query based on whether user_id is provided
+    if user_id:
+        query = """SELECT COUNT(*) as total_requests,
                   SUM(input_tokens) as total_input_tokens,
                   SUM(output_tokens) as total_output_tokens,
                   AVG(duration_ms) as avg_duration,
                   SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as error_count
-           FROM logs WHERE created_at >= ?""",
-        (since,)
-    ) as cursor:
+           FROM logs WHERE created_at >= ? AND user_id = ?"""
+        params = (since, user_id)
+    else:
+        query = """SELECT COUNT(*) as total_requests,
+                  SUM(input_tokens) as total_input_tokens,
+                  SUM(output_tokens) as total_output_tokens,
+                  AVG(duration_ms) as avg_duration,
+                  SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as error_count
+           FROM logs WHERE created_at >= ?"""
+        params = (since,)
+    
+    async with db.execute(query, params) as cursor:
         row = await cursor.fetchone()
         return dict(row) if row else {}
 
-async def get_model_stats(days: int = 7):
+async def get_model_stats(days: int = 7, user_id: int = None):
     db = await get_db()
     since = (datetime.now() - timedelta(days=days)).isoformat()
     
-    async with db.execute(
-        """SELECT model, COUNT(*) as count, 
+    # Build query based on whether user_id is provided
+    if user_id:
+        query = """SELECT model, COUNT(*) as count, 
+                  SUM(input_tokens + output_tokens) as total_tokens
+           FROM logs WHERE created_at >= ? AND user_id = ?
+           GROUP BY model ORDER BY count DESC"""
+        params = (since, user_id)
+    else:
+        query = """SELECT model, COUNT(*) as count, 
                   SUM(input_tokens + output_tokens) as total_tokens
            FROM logs WHERE created_at >= ?
-           GROUP BY model ORDER BY count DESC""",
-        (since,)
-    ) as cursor:
+           GROUP BY model ORDER BY count DESC"""
+        params = (since,)
+    
+    async with db.execute(query, params) as cursor:
         return [dict(row) for row in await cursor.fetchall()]
 
 async def get_channel_token_usage(channel_id: int) -> dict:
@@ -80,13 +98,26 @@ async def get_user_token_usage(user_id: int) -> dict:
         row = await cursor.fetchone()
         return dict(row) if row else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "request_count": 0}
 
-async def get_hourly_stats(days: int = 7):
+async def get_hourly_stats(days: int = 7, user_id: int = None):
     """Get hourly request and token statistics"""
     db = await get_db()
     since = (datetime.now() - timedelta(days=days)).isoformat()
     
-    async with db.execute(
-        """SELECT 
+    # Build query based on whether user_id is provided
+    if user_id:
+        query = """SELECT 
+                strftime('%Y-%m-%d %H:00:00', created_at) as hour,
+                COUNT(*) as requests,
+                SUM(input_tokens) as input_tokens,
+                SUM(output_tokens) as output_tokens,
+                SUM(input_tokens + output_tokens) as total_tokens
+           FROM logs 
+           WHERE created_at >= ? AND user_id = ?
+           GROUP BY hour
+           ORDER BY hour"""
+        params = (since, user_id)
+    else:
+        query = """SELECT 
                 strftime('%Y-%m-%d %H:00:00', created_at) as hour,
                 COUNT(*) as requests,
                 SUM(input_tokens) as input_tokens,
@@ -95,29 +126,46 @@ async def get_hourly_stats(days: int = 7):
            FROM logs 
            WHERE created_at >= ?
            GROUP BY hour
-           ORDER BY hour""",
-        (since,)
-    ) as cursor:
+           ORDER BY hour"""
+        params = (since,)
+    
+    async with db.execute(query, params) as cursor:
         return [dict(row) for row in await cursor.fetchall()]
 
 async def get_channel_stats():
-    """Get statistics for all channels"""
+    """Get statistics for all providers"""
+    from providers import get_all_providers
+    
     db = await get_db()
-    async with db.execute(
-        """SELECT 
-                c.id,
-                c.name,
-                c.type,
-                c.enabled,
-                COUNT(DISTINCT a.id) as total_accounts,
-                COUNT(DISTINCT CASE WHEN a.enabled = 1 THEN a.id END) as active_accounts,
-                COALESCE(SUM(a.total_tokens), 0) as total_tokens
-           FROM channels c
-           LEFT JOIN accounts a ON c.id = a.channel_id
-           GROUP BY c.id
-           ORDER BY total_tokens DESC"""
-    ) as cursor:
-        return [dict(row) for row in await cursor.fetchall()]
+    providers = get_all_providers()
+    result = []
+    
+    for name, provider in providers.items():
+        # Get account statistics for this provider
+        async with db.execute(
+            """SELECT 
+                    COUNT(DISTINCT id) as total_accounts,
+                    COUNT(DISTINCT CASE WHEN enabled = 1 THEN id END) as active_accounts,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens
+               FROM accounts
+               WHERE provider_type = ?""",
+            (name,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                result.append({
+                    "id": name,
+                    "name": name,
+                    "type": name,
+                    "enabled": provider.enabled,
+                    "total_accounts": row["total_accounts"] or 0,
+                    "active_accounts": row["active_accounts"] or 0,
+                    "total_tokens": row["total_tokens"] or 0
+                })
+    
+    # Sort by total_tokens descending
+    result.sort(key=lambda x: x["total_tokens"], reverse=True)
+    return result
 
 async def get_top_users(limit: int = 10):
     """Get top users by token usage"""

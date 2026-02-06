@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AiHub 管理面板</title>
+    <title>Agent Gateway</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -21,7 +21,26 @@
             <li><a href="#" data-page="users">用户</a></li>
             <li><a href="#" data-page="tokens">令牌</a></li>
             <li><a href="#" data-page="logs">日志</a></li>
+            <li><a href="#" data-page="profile">个人中心</a></li>
         </ul>
+        
+        <!-- User Info Section -->
+        <div class="user-info">
+            <div class="user-avatar" id="user-avatar">
+                <span id="user-avatar-text">A</span>
+            </div>
+            <div class="user-details">
+                <div class="user-email" id="user-email">加载中...</div>
+                <div class="user-role" id="current-user-role"></div>
+            </div>
+            <button class="btn-logout" onclick="logout()" title="退出登录">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                    <polyline points="16 17 21 12 16 7"></polyline>
+                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                </svg>
+            </button>
+        </div>
     </nav>
     
     <main class="content">
@@ -35,12 +54,14 @@
                 <div class="stat-card"><h3>错误率</h3><p id="stat-errors">-</p></div>
             </div>
             
-            <h2>渠道统计</h2>
-            <div class="table-container">
-                <table id="channel-stats">
-                    <thead><tr><th>渠道</th><th>类型</th><th>账号数</th><th>活跃账号</th><th>Token消耗</th><th>状态</th></tr></thead>
-                    <tbody></tbody>
-                </table>
+            <div id="channel-stats-section">
+                <h2>渠道统计</h2>
+                <div class="table-container">
+                    <table id="channel-stats">
+                        <thead><tr><th>渠道</th><th>类型</th><th>账号数</th><th>活跃账号</th><th>Token消耗</th><th>状态</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
             </div>
             
             <h2>请求趋势</h2>
@@ -61,22 +82,24 @@
                 </table>
             </div>
             
-            <h2>Top 用户</h2>
-            <div class="table-container">
-                <table id="top-users">
-                    <thead><tr><th>用户</th><th>输入Token</th><th>输出Token</th><th>总Token</th></tr></thead>
-                    <tbody></tbody>
-                </table>
+            <div id="top-users-section">
+                <h2>Top 用户</h2>
+                <div class="table-container">
+                    <table id="top-users">
+                        <thead><tr><th>用户</th><th>输入Token</th><th>输出Token</th><th>总Token</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
             </div>
         </section>
         
         <!-- Channels -->
         <section id="page-channels" class="page">
             <div class="page-header">
-                <h1>渠道管理</h1>
+                <h1>Provider 管理</h1>
                 <div class="btn-group">
                     <button class="btn" onclick="refreshAllUsage()">刷新用量</button>
-                    <button class="btn btn-primary" onclick="showChannelModal()">+ 添加渠道</button>
+                    <p style="color: #6b7280; font-size: 0.875rem; margin: 0;">Provider 自动发现，无需手动添加</p>
                 </div>
             </div>
             <div id="channels-grid" class="card-grid"></div>
@@ -125,7 +148,7 @@
         <section id="page-tokens" class="page">
             <div class="page-header">
                 <h1>令牌管理</h1>
-                <div class="btn-group">
+                <div class="btn-group" id="token-actions">
                     <button class="btn btn-primary" onclick="showTokenModal()">+ 添加令牌</button>
                 </div>
             </div>
@@ -144,6 +167,78 @@
                 </table>
             </div>
             <div style="margin-top: 16px;"><button class="btn" onclick="loadMoreLogs()">加载更多</button></div>
+        </section>
+        
+        <!-- Profile Page -->
+        <section id="page-profile" class="page">
+            <div class="page-header"><h1>个人中心</h1></div>
+            
+            <!-- Basic Info -->
+            <div class="card" style="margin-bottom: 24px;">
+                <h2>基本信息</h2>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <label>邮箱</label>
+                        <span id="profile-email">-</span>
+                    </div>
+                    <div class="info-item">
+                        <label>用户名</label>
+                        <span id="profile-name">-</span>
+                    </div>
+                    <div class="info-item">
+                        <label>角色</label>
+                        <span id="profile-role-badge">-</span>
+                    </div>
+                    <div class="info-item">
+                        <label>最后登录</label>
+                        <span id="profile-last-login">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Usage Stats -->
+            <div class="card" style="margin-bottom: 24px;">
+                <h2>使用统计</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>总Token数</h3>
+                        <p id="profile-total-tokens">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>输入Token</h3>
+                        <p id="profile-input-tokens">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>输出Token</h3>
+                        <p id="profile-output-tokens">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>配额使用</h3>
+                        <p id="profile-quota">-</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Change Password -->
+            <div class="card" style="margin-bottom: 24px;">
+                <h2>修改密码</h2>
+                <form id="change-password-form" onsubmit="event.preventDefault(); changePassword();" style="max-width: 500px;">
+                    <div class="form-group">
+                        <label>旧密码</label>
+                        <input type="password" id="old-password" required>
+                    </div>
+                    <div class="form-group">
+                        <label>新密码</label>
+                        <input type="password" id="new-password" required minlength="6">
+                        <small class="help-text">密码长度至少为6位</small>
+                    </div>
+                    <div class="form-group">
+                        <label>确认新密码</label>
+                        <input type="password" id="confirm-password" required minlength="6">
+                    </div>
+                    <button type="submit" class="btn btn-primary">修改密码</button>
+                </form>
+            </div>
         </section>
         
         <!-- Channel Edit Page -->
@@ -353,7 +448,15 @@
                 <input type="hidden" id="user-id">
                 <div class="form-group">
                     <label>名称</label>
-                    <input type="text" id="user-name" placeholder="用户名称">
+                    <input type="text" id="user-name" placeholder="用户名称" required>
+                </div>
+                <div class="form-group">
+                    <label>角色</label>
+                    <select id="user-role" required>
+                        <option value="user">普通用户</option>
+                        <option value="admin">管理员</option>
+                        <option value="super_admin">超级管理员</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>配额（-1 = 无限制）</label>
@@ -373,14 +476,10 @@
             <h2 id="token-modal-title">添加令牌</h2>
             <form id="token-form">
                 <input type="hidden" id="token-id">
+                <input type="hidden" id="token-user-id">
                 <div class="form-group">
                     <label>名称</label>
                     <input type="text" id="token-name" placeholder="令牌名称" required>
-                </div>
-                <div class="form-group">
-                    <label>所属用户ID</label>
-                    <input type="number" id="token-user-id" value="0" min="0">
-                    <small class="help-text">令牌将使用该用户的配额（0表示系统令牌）</small>
                 </div>
                 <div class="form-group">
                     <label>过期时间（留空 = 永不过期）</label>

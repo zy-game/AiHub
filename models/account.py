@@ -5,7 +5,9 @@ from .database import get_db
 class Account:
     def __init__(self, row: dict):
         self.id = row["id"]
-        self.channel_id = row["channel_id"]
+        # Support both old (channel_id) and new (provider_type) schema
+        self.provider_type = row.get("provider_type") or row.get("channel_id")
+        self.channel_id = self.provider_type  # Backward compatibility
         self.name = row.get("name", "")
         self.api_key = row["api_key"]
         self.usage = row.get("usage", 0) or 0
@@ -16,20 +18,42 @@ class Account:
         self.last_used_at = row.get("last_used_at")
         self.enabled = row.get("enabled", 1)
 
-async def get_available_account(channel_id: int) -> Optional[Account]:
-    """Get an available account from channel's pool (random selection)"""
+async def get_available_account(provider_type: str) -> Optional[Account]:
+    """Get an available account from provider's pool (random selection)"""
     db = await get_db()
-    async with db.execute(
-        """SELECT * FROM accounts 
-           WHERE channel_id = ? AND enabled = 1
-           ORDER BY RANDOM()
-           LIMIT 1""",
-        (channel_id,)
-    ) as cursor:
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        return Account(dict(row))
+    
+    # Try new schema first (provider_type column)
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+    
+    if "provider_type" in column_names:
+        # New schema
+        async with db.execute(
+            """SELECT * FROM accounts 
+               WHERE provider_type = ? AND enabled = 1
+               ORDER BY RANDOM()
+               LIMIT 1""",
+            (provider_type,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return Account(dict(row))
+    else:
+        # Old schema - provider_type is actually channel_id (integer)
+        # This is for backward compatibility during migration
+        async with db.execute(
+            """SELECT * FROM accounts 
+               WHERE channel_id = ? AND enabled = 1
+               ORDER BY RANDOM()
+               LIMIT 1""",
+            (provider_type,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return Account(dict(row))
 
 async def add_account_credit_usage(account_id: int, delta: int):
     """Add credit usage to an account (Kiro only)"""
@@ -54,52 +78,125 @@ async def add_account_tokens(account_id: int, input_tokens: int, output_tokens: 
     )
     await db.commit()
 
-async def get_accounts_by_channel(channel_id: int):
-    """Get all accounts for a channel"""
+async def get_accounts_by_provider(provider_type: str):
+    """Get all accounts for a provider"""
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM accounts WHERE channel_id = ? ORDER BY id DESC",
-        (channel_id,)
-    ) as cursor:
-        rows = await cursor.fetchall()
-        return [Account(dict(row)) for row in rows]
+    
+    # Check schema
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+    
+    if "provider_type" in column_names:
+        async with db.execute(
+            "SELECT * FROM accounts WHERE provider_type = ? ORDER BY id DESC",
+            (provider_type,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [Account(dict(row)) for row in rows]
+    else:
+        # Old schema compatibility
+        async with db.execute(
+            "SELECT * FROM accounts WHERE channel_id = ? ORDER BY id DESC",
+            (provider_type,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [Account(dict(row)) for row in rows]
 
-async def get_all_accounts_with_channels():
+# Backward compatibility alias
+async def get_accounts_by_channel(channel_id):
+    """Deprecated: use get_accounts_by_provider instead"""
+    return await get_accounts_by_provider(channel_id)
+
+async def get_all_accounts_with_providers():
+    """Get all accounts with their provider information"""
     db = await get_db()
-    async with db.execute(
-        """SELECT a.*, c.name as channel_name, c.type as channel_type
-           FROM accounts a
-           JOIN channels c ON a.channel_id = c.id
-           ORDER BY a.id DESC"""
-    ) as cursor:
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+    
+    # Check schema
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+    
+    if "provider_type" in column_names:
+        # New schema - no join needed
+        async with db.execute(
+            "SELECT *, provider_type as channel_type FROM accounts ORDER BY id DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            result = []
+            for row in rows:
+                row_dict = dict(row)
+                row_dict["channel_name"] = row_dict["provider_type"]  # Use provider_type as name
+                result.append(row_dict)
+            return result
+    else:
+        # Old schema - join with channels table
+        async with db.execute(
+            """SELECT a.*, c.name as channel_name, c.type as channel_type
+               FROM accounts a
+               JOIN channels c ON a.channel_id = c.id
+               ORDER BY a.id DESC"""
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+# Backward compatibility alias
+async def get_all_accounts_with_channels():
+    """Deprecated: use get_all_accounts_with_providers instead"""
+    return await get_all_accounts_with_providers()
 
 async def add_kiro_points_usage(account_id: int, delta: int, updated_at: str):
     """Deprecated: use add_account_credit_usage instead"""
     await add_account_credit_usage(account_id, delta)
 
-async def create_account(channel_id: int, api_key: str, name: str = None) -> int:
+async def create_account(provider_type: str, api_key: str, name: str = None) -> int:
+    """Create an account for a provider"""
     db = await get_db()
-    cursor = await db.execute(
-        "INSERT INTO accounts (channel_id, api_key, name) VALUES (?, ?, ?)",
-        (channel_id, api_key, name)
-    )
+    
+    # Check schema
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+    
+    if "provider_type" in column_names:
+        cursor = await db.execute(
+            "INSERT INTO accounts (provider_type, api_key, name) VALUES (?, ?, ?)",
+            (provider_type, api_key, name)
+        )
+    else:
+        # Old schema - provider_type is channel_id
+        cursor = await db.execute(
+            "INSERT INTO accounts (channel_id, api_key, name) VALUES (?, ?, ?)",
+            (provider_type, api_key, name)
+        )
     await db.commit()
     return cursor.lastrowid
 
-async def batch_create_accounts(channel_id: int, accounts: list) -> int:
+async def batch_create_accounts(provider_type: str, accounts: list) -> int:
     """Batch import accounts: [{"api_key": "xxx", "name": "optional"}]"""
     db = await get_db()
+    
+    # Check schema
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+    
     count = 0
     for acc in accounts:
         api_key = acc.get("api_key", "").strip()
         if not api_key:
             continue
-        await db.execute(
-            "INSERT INTO accounts (channel_id, api_key, name) VALUES (?, ?, ?)",
-            (channel_id, api_key, acc.get("name", ""))
-        )
+        
+        if "provider_type" in column_names:
+            await db.execute(
+                "INSERT INTO accounts (provider_type, api_key, name) VALUES (?, ?, ?)",
+                (provider_type, api_key, acc.get("name", ""))
+            )
+        else:
+            await db.execute(
+                "INSERT INTO accounts (channel_id, api_key, name) VALUES (?, ?, ?)",
+                (provider_type, api_key, acc.get("name", ""))
+            )
         count += 1
     await db.commit()
     return count
@@ -125,18 +222,48 @@ async def delete_account(id_: int) -> bool:
     await db.commit()
     return True
 
-async def delete_accounts_by_channel(channel_id: int) -> int:
+async def delete_accounts_by_provider(provider_type: str) -> int:
+    """Delete all accounts for a provider"""
     db = await get_db()
-    cursor = await db.execute("DELETE FROM accounts WHERE channel_id = ?", (channel_id,))
+    
+    # Check schema
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+    
+    if "provider_type" in column_names:
+        cursor = await db.execute("DELETE FROM accounts WHERE provider_type = ?", (provider_type,))
+    else:
+        cursor = await db.execute("DELETE FROM accounts WHERE channel_id = ?", (provider_type,))
+    
     await db.commit()
     return cursor.rowcount
 
-async def get_account_usage_totals(channel_id: int) -> dict:
-    """Get total usage and limit for all accounts in a channel"""
+# Backward compatibility alias
+async def delete_accounts_by_channel(channel_id):
+    """Deprecated: use delete_accounts_by_provider instead"""
+    return await delete_accounts_by_provider(channel_id)
+
+async def get_account_usage_totals(provider_type: str) -> dict:
+    """Get total usage and limit for all accounts of a provider"""
     db = await get_db()
-    async with db.execute(
-        "SELECT COALESCE(SUM(usage), 0) as used, COALESCE(SUM(\"limit\"), 0) as limit_value FROM accounts WHERE channel_id = ?",
-        (channel_id,)
-    ) as cursor:
-        row = await cursor.fetchone()
-        return {"used": row["used"], "limit": row["limit_value"]}
+    
+    # Check schema
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+    
+    if "provider_type" in column_names:
+        async with db.execute(
+            "SELECT COALESCE(SUM(usage), 0) as used, COALESCE(SUM(\"limit\"), 0) as limit_value FROM accounts WHERE provider_type = ?",
+            (provider_type,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return {"used": row["used"], "limit": row["limit_value"]}
+    else:
+        async with db.execute(
+            "SELECT COALESCE(SUM(usage), 0) as used, COALESCE(SUM(\"limit\"), 0) as limit_value FROM accounts WHERE channel_id = ?",
+            (provider_type,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return {"used": row["used"], "limit": row["limit_value"]}

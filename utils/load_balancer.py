@@ -1,59 +1,55 @@
-"""Load balancer for channel selection"""
+"""Load balancer for provider selection"""
 import random
-from typing import Optional
-from models.channel import Channel, get_channels_by_model
+from typing import Optional, List
 
 
 class LoadBalancer:
-    """Load balancer with multiple strategies"""
+    """Load balancer with multiple strategies for provider selection"""
     
-    @staticmethod
-    async def select_channel(model: str, strategy: str = "weighted") -> Optional[Channel]:
+    def select_provider(self, providers: List, strategy: str = "weighted"):
         """
-        Select a channel based on load balancing strategy
+        Select a provider based on load balancing strategy
         
         Args:
-            model: Model name
+            providers: List of BaseProvider instances
             strategy: Selection strategy (weighted, priority, round_robin, least_response_time)
         
         Returns:
-            Selected channel or None
+            Selected provider or None
         """
-        channels = await get_channels_by_model(model)
-        
-        if not channels:
+        if not providers:
             return None
         
-        if len(channels) == 1:
-            return channels[0]
+        if len(providers) == 1:
+            return providers[0]
         
         if strategy == "weighted":
-            return LoadBalancer._weighted_random(channels)
+            return self._weighted_random(providers)
         elif strategy == "priority":
-            return LoadBalancer._priority_first(channels)
+            return self._priority_first(providers)
         elif strategy == "least_response_time":
-            return LoadBalancer._least_response_time(channels)
+            return self._least_response_time(providers)
         elif strategy == "round_robin":
-            return LoadBalancer._round_robin(channels)
+            return self._round_robin(providers)
         else:
-            return LoadBalancer._weighted_random(channels)
+            return self._weighted_random(providers)
     
     @staticmethod
-    def _weighted_random(channels: list[Channel]) -> Channel:
+    def _weighted_random(providers: List) -> Optional:
         """
         Weighted random selection based on priority, weight, and success rate
         
         Formula: score = priority * 100 + weight * 10 + success_rate * 5 - (response_time / 1000)
         """
         scores = []
-        for channel in channels:
-            success_rate = channel.get_success_rate()
-            response_penalty = channel.avg_response_time / 1000 if channel.avg_response_time > 0 else 0
+        for provider in providers:
+            success_rate = provider.get_success_rate()
+            response_penalty = provider.avg_response_time / 1000 if provider.avg_response_time > 0 else 0
             
             # Calculate score
             score = (
-                channel.priority * 100 +  # Priority is most important
-                channel.weight * 10 +      # Weight is secondary
+                provider.priority * 100 +  # Priority is most important
+                provider.weight * 10 +      # Weight is secondary
                 success_rate * 5 -         # Success rate bonus
                 response_penalty           # Response time penalty
             )
@@ -70,38 +66,38 @@ class LoadBalancer:
         for i, score in enumerate(scores):
             cumulative += score
             if rand <= cumulative:
-                return channels[i]
+                return providers[i]
         
-        return channels[-1]
+        return providers[-1]
     
     @staticmethod
-    def _priority_first(channels: list[Channel]) -> Channel:
-        """Select channel with highest priority (already sorted)"""
-        return channels[0]
+    def _priority_first(providers: List):
+        """Select provider with highest priority (already sorted)"""
+        return providers[0]
     
     @staticmethod
-    def _least_response_time(channels: list[Channel]) -> Channel:
-        """Select channel with lowest average response time"""
-        # Filter channels with response time data
-        channels_with_time = [c for c in channels if c.total_requests > 0]
+    def _least_response_time(providers: List):
+        """Select provider with lowest average response time"""
+        # Filter providers with response time data
+        providers_with_time = [p for p in providers if p.total_requests > 0]
         
-        if not channels_with_time:
+        if not providers_with_time:
             # No response time data, fall back to weighted
-            return LoadBalancer._weighted_random(channels)
+            return LoadBalancer._weighted_random(providers)
         
         # Sort by response time (ascending)
-        channels_with_time.sort(key=lambda c: c.avg_response_time)
-        return channels_with_time[0]
+        providers_with_time.sort(key=lambda p: p.avg_response_time)
+        return providers_with_time[0]
     
     @staticmethod
-    def _round_robin(channels: list[Channel]) -> Channel:
+    def _round_robin(providers: List):
         """
         Round robin selection based on total requests
-        Select the channel with least total requests
+        Select the provider with least total requests
         """
         # Sort by total requests (ascending)
-        channels.sort(key=lambda c: c.total_requests)
-        return channels[0]
+        providers.sort(key=lambda p: p.total_requests)
+        return providers[0]
 
 
 # Global load balancer instance

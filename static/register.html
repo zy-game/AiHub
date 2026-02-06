@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>注册 - AiHub</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .register-container {
+            width: 100%;
+            max-width: 400px;
+        }
+        
+        .register-card {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo h1 {
+            font-size: 32px;
+            color: #667eea;
+            font-weight: 700;
+        }
+        
+        .logo p {
+            color: #6b7280;
+            margin-top: 8px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #374151;
+            font-weight: 500;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-group small {
+            display: block;
+            margin-top: 4px;
+            color: #6b7280;
+            font-size: 12px;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .message {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .message.show {
+            display: block;
+        }
+        
+        .message.error {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        
+        .message.success {
+            background: #d1fae5;
+            color: #059669;
+        }
+        
+        .links {
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        .links a {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        
+        .links a:hover {
+            text-decoration: underline;
+        }
+        
+        .divider {
+            text-align: center;
+            margin: 20px 0;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="register-container">
+        <div class="register-card">
+            <div class="logo">
+                <h1>AiHub</h1>
+                <p>创建您的账号</p>
+            </div>
+            
+            <div id="message" class="message"></div>
+            
+            <form id="register-form">
+                <div class="form-group">
+                    <label for="email">邮箱 *</label>
+                    <input type="email" id="email" name="email" placeholder="your@email.com" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="name">用户名 *</label>
+                    <input type="text" id="name" name="name" placeholder="您的名字" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">密码 *</label>
+                    <input type="password" id="password" name="password" placeholder="至少6位" required minlength="6">
+                    <small>密码长度至少为6位</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="invite_code">邀请码（可选）</label>
+                    <input type="text" id="invite_code" name="invite_code" placeholder="如有邀请码请输入">
+                    <small>邀请码用于营销返利，非必填</small>
+                </div>
+                
+                <button type="submit" class="btn">注册</button>
+            </form>
+            
+            <div class="divider">或</div>
+            
+            <div class="links">
+                <a href="/login">已有账号？立即登录</a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const form = document.getElementById('register-form');
+        const message = document.getElementById('message');
+        
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const name = document.getElementById('name').value;
+            const password = document.getElementById('password').value;
+            const invite_code = document.getElementById('invite_code').value.trim() || null;
+            
+            // Hide previous message
+            message.classList.remove('show', 'error', 'success');
+            
+            try {
+                const resp = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({email, name, password, invite_code})
+                });
+                
+                const data = await resp.json();
+                
+                if (resp.ok) {
+                    // Registration successful
+                    message.textContent = data.message + ' 正在跳转到验证页面...';
+                    message.classList.add('show', 'success');
+                    
+                    // Redirect to verification page after 2 seconds
+                    setTimeout(() => {
+                        window.location.href = data.verification_url;
+                    }, 2000);
+                } else {
+                    // Show error
+                    message.textContent = data.error || '注册失败';
+                    message.classList.add('show', 'error');
+                }
+            } catch (err) {
+                message.textContent = '网络错误，请稍后重试';
+                message.classList.add('show', 'error');
+            }
+        });
+    </script>
+</body>
+</html>

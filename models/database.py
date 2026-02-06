@@ -19,68 +19,44 @@ async def close_db():
         _db = None
 
 async def init_tables(db: aiosqlite.Connection):
-    # Check if we need to migrate old schema
-    async with db.execute("PRAGMA table_info(channels)") as cursor:
+    # Check if channels table exists (old schema)
+    async with db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='channels'"
+    ) as cursor:
+        channels_exists = await cursor.fetchone() is not None
+    
+    # If channels table exists, skip creating it (migration should have removed it)
+    # Only create new provider-based schema
+    
+    # Check if accounts table exists and has the right schema
+    async with db.execute("PRAGMA table_info(accounts)") as cursor:
         columns = await cursor.fetchall()
-        column_names = [col[1] for col in columns]
-        
-        # Check if old schema with models/model_mapping exists
-        if "models" in column_names or "model_mapping" in column_names:
-            logger.info("Migrating database: removing models and model_mapping columns from channels")
-            # SQLite doesn't support DROP COLUMN directly, need to recreate table
-            await db.executescript("""
-                CREATE TABLE IF NOT EXISTS channels_new (
+        column_names = [col[1] for col in columns] if columns else []
+    
+    # Create accounts table with new schema if it doesn't exist or needs migration
+    if not column_names or "channel_id" in column_names:
+        # Table doesn't exist or has old schema - will be handled by migration script
+        if not column_names:
+            # Create new schema directly
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    priority INTEGER DEFAULT 0,
-                    weight INTEGER DEFAULT 1,
+                    provider_type TEXT NOT NULL,
+                    name TEXT DEFAULT '',
+                    api_key TEXT NOT NULL,
+                    usage INTEGER DEFAULT 0,
+                    "limit" INTEGER DEFAULT 0,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    total_tokens INTEGER DEFAULT 0,
+                    last_used_at TIMESTAMP,
                     enabled INTEGER DEFAULT 1,
-                    avg_response_time INTEGER DEFAULT 0,
-                    total_requests INTEGER DEFAULT 0,
-                    failed_requests INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                INSERT INTO channels_new (id, name, type, priority, weight, enabled, avg_response_time, total_requests, failed_requests, created_at)
-                    SELECT id, name, type, priority, weight, enabled, 
-                           COALESCE(avg_response_time, 0), 
-                           COALESCE(total_requests, 0), 
-                           COALESCE(failed_requests, 0), 
-                           created_at 
-                    FROM channels;
-                DROP TABLE channels;
-                ALTER TABLE channels_new RENAME TO channels;
+                )
             """)
-            await db.commit()
-            logger.info("Database migration completed: models and model_mapping removed")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_accounts_provider ON accounts(provider_type, enabled)")
     
     await db.executescript("""
-        CREATE TABLE IF NOT EXISTS channels (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            type TEXT NOT NULL,
-            priority INTEGER DEFAULT 0,
-            weight INTEGER DEFAULT 1,
-            enabled INTEGER DEFAULT 1,
-            avg_response_time INTEGER DEFAULT 0,
-            total_requests INTEGER DEFAULT 0,
-            failed_requests INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE TABLE IF NOT EXISTS accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id INTEGER NOT NULL,
-            name TEXT DEFAULT '',
-            api_key TEXT NOT NULL,
-            usage INTEGER DEFAULT 0,
-            "limit" INTEGER DEFAULT 0,
-            last_used_at TIMESTAMP,
-            enabled INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
-        );
-        
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             api_key TEXT UNIQUE NOT NULL,
@@ -127,27 +103,11 @@ async def init_tables(db: aiosqlite.Connection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
-        CREATE INDEX IF NOT EXISTS idx_channels_enabled ON channels(enabled);
-        CREATE INDEX IF NOT EXISTS idx_accounts_channel ON accounts(channel_id, enabled);
         CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
         CREATE INDEX IF NOT EXISTS idx_tokens_key ON tokens(key);
         CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
         CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at);
     """)
-    # Migrate accounts table: add usage/limit columns if missing
-    async with db.execute("PRAGMA table_info(accounts)") as cursor:
-        columns = await cursor.fetchall()
-        column_names = [col[1] for col in columns]
-        if "usage" not in column_names:
-            await db.execute("ALTER TABLE accounts ADD COLUMN usage INTEGER DEFAULT 0")
-        if "limit" not in column_names:
-            await db.execute("ALTER TABLE accounts ADD COLUMN \"limit\" INTEGER DEFAULT 0")
-        if "input_tokens" not in column_names:
-            await db.execute("ALTER TABLE accounts ADD COLUMN input_tokens INTEGER DEFAULT 0")
-        if "output_tokens" not in column_names:
-            await db.execute("ALTER TABLE accounts ADD COLUMN output_tokens INTEGER DEFAULT 0")
-        if "total_tokens" not in column_names:
-            await db.execute("ALTER TABLE accounts ADD COLUMN total_tokens INTEGER DEFAULT 0")
     
     # Migrate users table: add token columns if missing
     async with db.execute("PRAGMA table_info(users)") as cursor:
@@ -171,16 +131,12 @@ async def init_tables(db: aiosqlite.Connection):
         if "tpm_limit" not in column_names:
             await db.execute("ALTER TABLE tokens ADD COLUMN tpm_limit INTEGER DEFAULT 0")
     
-    # Migrate channels table: add statistics fields if missing
-    async with db.execute("PRAGMA table_info(channels)") as cursor:
+    # Add provider_type to logs table if missing
+    async with db.execute("PRAGMA table_info(logs)") as cursor:
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
-        if "avg_response_time" not in column_names:
-            await db.execute("ALTER TABLE channels ADD COLUMN avg_response_time INTEGER DEFAULT 0")
-        if "total_requests" not in column_names:
-            await db.execute("ALTER TABLE channels ADD COLUMN total_requests INTEGER DEFAULT 0")
-        if "failed_requests" not in column_names:
-            await db.execute("ALTER TABLE channels ADD COLUMN failed_requests INTEGER DEFAULT 0")
+        if "provider_type" not in column_names:
+            await db.execute("ALTER TABLE logs ADD COLUMN provider_type TEXT")
     
     await db.commit()
     logger.info("Database tables initialized")

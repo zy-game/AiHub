@@ -1,20 +1,33 @@
 import os
 from aiohttp import web
 from models.database import get_db, close_db
+from models.init_admin import init_auth_system
 from server.middleware import auth_middleware, error_middleware, cors_middleware
 from server.routes import (
     handle_chat_completions, handle_messages, handle_responses,
     handle_gemini, handle_models
 )
+# Import new provider-based API
+from server.api_providers import (
+    api_list_providers, api_get_provider, api_update_provider_config, api_provider_models,
+    api_list_provider_accounts, api_create_provider_account, api_batch_import_provider_accounts, api_clear_provider_accounts,
+    api_refresh_provider_usage, api_refresh_all_providers_usage,
+    api_kiro_device_auth, api_kiro_device_token
+)
+# Import authentication API
+from server.api_auth import (
+    api_register, api_verify_email, api_login, api_logout,
+    api_current_user, api_change_password, api_user_tokens,
+    api_create_invite_code, api_list_invite_codes
+)
+# Import legacy APIs (users, tokens, logs, stats)
 from server.api import (
-    api_list_channels, api_create_channel, api_update_channel, api_delete_channel, api_channel_models,
-    api_list_all_accounts, api_list_accounts, api_create_account, api_batch_import_accounts, api_update_account, api_delete_account, api_clear_accounts,
+    api_list_all_accounts, api_update_account, api_delete_account,
     api_list_users, api_create_user, api_update_user, api_delete_user,
     api_list_tokens, api_create_token, api_update_token, api_delete_token, api_token_stats, api_model_pricing,
     api_list_logs, api_get_stats,
-    api_kiro_device_auth, api_kiro_device_token,
-    api_refresh_account_usage, api_refresh_channel_usage, api_refresh_all_usage,
-    api_health_check_channel, api_health_check_all
+    api_refresh_account_usage,
+    api_health_check_all
 )
 from server.tasks import start_background_tasks
 from utils.logger import logger
@@ -23,6 +36,8 @@ from config import HOST, PORT
 async def on_startup(app: web.Application):
     await get_db()
     logger.info("Database connected")
+    await init_auth_system()  # Initialize super admin and invite code
+    logger.info("Authentication system initialized")
     await start_background_tasks()
     logger.info("Background tasks started")
 
@@ -37,6 +52,20 @@ def create_app() -> web.Application:
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     
+    # Authentication routes (public)
+    app.router.add_get("/login", lambda r: web.FileResponse("static/login.html"))
+    app.router.add_get("/register", lambda r: web.FileResponse("static/register.html"))
+    app.router.add_get("/verify-email", lambda r: web.FileResponse("static/verify-email.html"))
+    app.router.add_post("/api/auth/register", api_register)
+    app.router.add_get("/api/auth/verify-email", api_verify_email)
+    app.router.add_post("/api/auth/login", api_login)
+    app.router.add_post("/api/auth/logout", api_logout)
+    app.router.add_get("/api/auth/me", api_current_user)
+    app.router.add_post("/api/auth/change-password", api_change_password)
+    app.router.add_get("/api/auth/tokens", api_user_tokens)
+    app.router.add_post("/api/auth/invite-codes", api_create_invite_code)
+    app.router.add_get("/api/auth/invite-codes", api_list_invite_codes)
+    
     # API routes (relay)
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_post("/v1/messages", handle_messages)
@@ -46,19 +75,30 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/v1/models/{model}", handle_models)
     
-    # Admin API routes - Channels
-    app.router.add_get("/api/channels", api_list_channels)
-    app.router.add_post("/api/channels", api_create_channel)
-    app.router.add_put("/api/channels/{id}", api_update_channel)
-    app.router.add_delete("/api/channels/{id}", api_delete_channel)
-    app.router.add_get("/api/channels/{id}/models", api_channel_models)
+    # Admin API routes - Providers (NEW)
+    app.router.add_get("/api/providers", api_list_providers)
+    app.router.add_get("/api/providers/{type}", api_get_provider)
+    app.router.add_put("/api/providers/{type}/config", api_update_provider_config)
+    app.router.add_get("/api/providers/{type}/models", api_provider_models)
     
-    # Admin API routes - Accounts (per channel)
+    # Admin API routes - Accounts (per provider) (NEW)
+    app.router.add_get("/api/providers/{type}/accounts", api_list_provider_accounts)
+    app.router.add_post("/api/providers/{type}/accounts", api_create_provider_account)
+    app.router.add_post("/api/providers/{type}/accounts/import", api_batch_import_provider_accounts)
+    app.router.add_delete("/api/providers/{type}/accounts", api_clear_provider_accounts)
+    
+    # Backward compatibility - map old /api/channels to /api/providers
+    app.router.add_get("/api/channels", api_list_providers)  # Same as providers
+    app.router.add_get("/api/channels/{type}/models", api_provider_models)
+    app.router.add_get("/api/channels/{type}/accounts", api_list_provider_accounts)
+    app.router.add_post("/api/channels/{type}/accounts", api_create_provider_account)
+    app.router.add_post("/api/channels/{type}/accounts/import", api_batch_import_provider_accounts)
+    app.router.add_delete("/api/channels/{type}/accounts", api_clear_provider_accounts)
+    app.router.add_put("/api/channels/{type}", api_update_provider_config)  # Map to config update
+    app.router.add_post("/api/channels/{type}/refresh-usage", api_refresh_provider_usage)
+    
+    # Admin API routes - Accounts (global)
     app.router.add_get("/api/accounts", api_list_all_accounts)
-    app.router.add_get("/api/channels/{channel_id}/accounts", api_list_accounts)
-    app.router.add_post("/api/channels/{channel_id}/accounts", api_create_account)
-    app.router.add_post("/api/channels/{channel_id}/accounts/import", api_batch_import_accounts)
-    app.router.add_delete("/api/channels/{channel_id}/accounts", api_clear_accounts)
     app.router.add_put("/api/accounts/{id}", api_update_account)
     app.router.add_delete("/api/accounts/{id}", api_delete_account)
     
@@ -81,17 +121,16 @@ def create_app() -> web.Application:
     app.router.add_get("/api/logs", api_list_logs)
     app.router.add_get("/api/stats", api_get_stats)
     
-    # Kiro OAuth routes
+    # Kiro OAuth routes (NEW - provider-based)
     app.router.add_post("/api/kiro/device-auth", api_kiro_device_auth)
     app.router.add_post("/api/kiro/device-token", api_kiro_device_token)
     
-    # Usage refresh routes
+    # Usage refresh routes (NEW - provider-based)
     app.router.add_post("/api/accounts/{id}/refresh-usage", api_refresh_account_usage)
-    app.router.add_post("/api/channels/{id}/refresh-usage", api_refresh_channel_usage)
-    app.router.add_post("/api/refresh-all-usage", api_refresh_all_usage)
+    app.router.add_post("/api/providers/{type}/refresh-usage", api_refresh_provider_usage)
+    app.router.add_post("/api/refresh-all-usage", api_refresh_all_providers_usage)
     
     # Health check routes
-    app.router.add_post("/api/channels/{id}/health-check", api_health_check_channel)
     app.router.add_post("/api/health-check-all", api_health_check_all)
     
     # Static files

@@ -15,24 +15,28 @@ function toggleTheme() {
     }
 })();
 
-let ADMIN_KEY = localStorage.getItem('adminKey') || '';
-if (!ADMIN_KEY) {
-    ADMIN_KEY = prompt('请输入管理密钥:') || '';
-    localStorage.setItem('adminKey', ADMIN_KEY);
-}
-
+// API wrapper - now uses session authentication (cookies)
 const API = {
     async request(method, url, data = null, contentType = 'application/json') {
-        const options = { method, headers: { 'X-Admin-Key': ADMIN_KEY } };
+        const options = { 
+            method, 
+            headers: {},
+            credentials: 'include'  // Include cookies in requests
+        };
+        
         if (data) {
             options.body = contentType === 'text/plain' ? data : JSON.stringify(data);
             options.headers['Content-Type'] = contentType;
         }
+        
         const resp = await fetch(url, options);
+        
+        // If 401, redirect to login
         if (resp.status === 401) {
-            const newKey = prompt('管理密钥无效，请重新输入:');
-            if (newKey) { ADMIN_KEY = newKey; localStorage.setItem('adminKey', newKey); return API.request(method, url, data, contentType); }
+            window.location.href = '/login';
+            return;
         }
+        
         return resp.json();
     },
     get: (url) => API.request('GET', url),
@@ -92,7 +96,15 @@ function showPage(page) {
 }
 
 function loadPageData(page) {
-    const loaders = { dashboard: loadDashboard, channels: loadChannels, accounts: loadAccountsAll, users: loadUsers, tokens: loadTokens, logs: loadLogs };
+    const loaders = { 
+        dashboard: loadDashboard, 
+        channels: loadChannels, 
+        accounts: loadAccountsAll, 
+        users: loadUsers, 
+        tokens: loadTokens, 
+        logs: loadLogs,
+        profile: loadProfile
+    };
     loaders[page]?.();
 }
 
@@ -108,34 +120,41 @@ async function loadDashboard() {
     document.getElementById('stat-duration').textContent = o.avg_duration ? `${Math.round(o.avg_duration)}ms` : '-';
     document.getElementById('stat-errors').textContent = o.total_requests ? `${((o.error_count||0)/o.total_requests*100).toFixed(1)}%` : '0%';
     
-    // Channel stats
+    // Channel stats - only load if section is visible (super_admin only)
     const channelTbody = document.querySelector('#channel-stats tbody');
-    channelTbody.innerHTML = (data.channels || []).map(c => `
-        <tr>
-            <td><strong>${c.name}</strong></td>
-            <td>${getTypeBadge(c.type)}</td>
-            <td>${c.total_accounts || 0}</td>
-            <td>${c.active_accounts || 0}</td>
-            <td>${formatTokens(c.total_tokens)}</td>
-            <td>${c.enabled ? getBadge('success','启用') : getBadge('danger','禁用')}</td>
-        </tr>
-    `).join('');
+    if (channelTbody && data.channels && data.channels.length > 0) {
+        channelTbody.innerHTML = data.channels.map(c => `
+            <tr>
+                <td><strong>${c.name}</strong></td>
+                <td>${getTypeBadge(c.type)}</td>
+                <td>${c.total_accounts || 0}</td>
+                <td>${c.active_accounts || 0}</td>
+                <td>${formatTokens(c.total_tokens)}</td>
+                <td>${c.enabled ? getBadge('success','启用') : getBadge('danger','禁用')}</td>
+            </tr>
+        `).join('');
+    }
     
-    // Model stats
-    document.querySelector('#model-stats tbody').innerHTML = (data.models||[]).map(m => 
-        `<tr><td>${m.model}</td><td>${m.count}</td><td>${formatTokens(m.total_tokens)}</td></tr>`
-    ).join('');
-    
-    // Top users
+    // Top users - only load if section is visible (super_admin only)
     const usersTbody = document.querySelector('#top-users tbody');
-    usersTbody.innerHTML = (data.top_users||[]).map(u => `
-        <tr>
-            <td>${u.name || '用户 #' + u.id}</td>
-            <td>${formatTokens(u.input_tokens)}</td>
-            <td>${formatTokens(u.output_tokens)}</td>
-            <td><strong>${formatTokens(u.total_tokens)}</strong></td>
-        </tr>
-    `).join('');
+    if (usersTbody && data.top_users && data.top_users.length > 0) {
+        usersTbody.innerHTML = data.top_users.map(u => `
+            <tr>
+                <td>${u.name || '用户 #' + u.id}</td>
+                <td>${formatTokens(u.input_tokens)}</td>
+                <td>${formatTokens(u.output_tokens)}</td>
+                <td><strong>${formatTokens(u.total_tokens)}</strong></td>
+            </tr>
+        `).join('');
+    }
+    
+    // Model stats (show for all users)
+    const modelTbody = document.querySelector('#model-stats tbody');
+    if (modelTbody) {
+        modelTbody.innerHTML = (data.models||[]).map(m => 
+            `<tr><td>${m.model}</td><td>${m.count}</td><td>${formatTokens(m.total_tokens)}</td></tr>`
+        ).join('');
+    }
     
     // Render charts
     renderRequestsChart(data.hourly || []);
@@ -207,7 +226,7 @@ function renderTokensChart(hourlyData) {
 
 // Channels (Card)
 async function loadChannels() {
-    const channels = await API.get('/api/channels');
+    const channels = await API.get('/api/providers');
     document.getElementById('channels-grid').innerHTML = channels.map(c => {
         const successRate = c.total_requests > 0 ? ((1 - (c.failed_requests || 0) / c.total_requests) * 100).toFixed(1) : '100.0';
         
@@ -268,8 +287,8 @@ async function loadChannels() {
             <div class="item-card-footer">
                 ${c.supports_usage_refresh?`<button class="btn btn-xs" onclick="refreshChannelUsage(${c.id})">刷新</button>`:''}
                 <button class="btn btn-xs" id="health-check-btn-${c.id}" onclick="healthCheckChannel(${c.id})">健康检查</button>
-                <button class="btn btn-xs" onclick="editChannel(${c.id})">编辑</button>
-                <button class="btn btn-xs btn-danger" onclick="deleteChannel(${c.id})">删除</button>
+                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs" onclick="editChannel(${c.id})">编辑</button>` : ''}
+                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs btn-danger" onclick="deleteChannel(${c.id})">删除</button>` : ''}
             </div>
         </div>
     `;
@@ -352,7 +371,7 @@ function showChannelModal(c = null) {
 }
 
 async function editChannel(id) {
-    const channels = await API.get('/api/channels');
+    const channels = await API.get('/api/providers');
     const c = channels.find(x => x.id === id);
     if (c) {
         // Navigate to edit page
@@ -419,7 +438,7 @@ document.getElementById('channel-form').addEventListener('submit', async e => {
         priority: parseInt(document.getElementById('channel-priority').value) || 0,
         weight: parseInt(document.getElementById('channel-weight').value) || 1
     };
-    id ? await API.put(`/api/channels/${id}`, data) : await API.post('/api/channels', data);
+    id ? await API.put(`/api/channels/${id}`, data) : await API.post('/api/providers', data);
     closeModal('channel-modal');
     loadChannels();
 });
@@ -428,7 +447,7 @@ document.getElementById('channel-form').addEventListener('submit', async e => {
 async function showChannelAccountsPage(id, name) {
     currentChannelId = id;
     currentChannelName = name;
-    const channels = await API.get('/api/channels');
+    const channels = await API.get('/api/providers');
     const channel = channels.find(c => c.id === id);
     currentChannelType = channel?.type || 'openai';
     const supportsRefresh = channel?.supports_usage_refresh || false;
@@ -465,9 +484,9 @@ async function loadAccounts() {
             </div>
             <div class="item-card-footer">
                 ${currentChannelType==='kiro'?`<button class="btn btn-xs" onclick="refreshAccountUsage(${a.id})">刷新</button>`:''}
-                <button class="btn btn-xs" onclick="editAccount(${a.id})">编辑</button>
-                <button class="btn btn-xs" onclick="toggleAccount(${a.id},${a.enabled})">${a.enabled?'禁用':'启用'}</button>
-                <button class="btn btn-xs btn-danger" onclick="deleteAccount(${a.id})">删除</button>
+                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs" onclick="editAccount(${a.id})">编辑</button>` : ''}
+                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs" onclick="toggleAccount(${a.id},${a.enabled})">${a.enabled?'禁用':'启用'}</button>` : ''}
+                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs btn-danger" onclick="deleteAccount(${a.id})">删除</button>` : ''}
             </div>
         </div>
     `).join('');
@@ -541,7 +560,7 @@ function showAccountModal() {
 
 async function showAccountModalWithChannel() {
     // Load channels for selection
-    const channels = await API.get('/api/channels');
+    const channels = await API.get('/api/providers');
     const select = document.getElementById('account-channel-select');
     select.innerHTML = '<option value="">请选择渠道</option>' + 
         channels.map(c => `<option value="${c.id}">${c.name} (${c.type})</option>`).join('');
@@ -609,8 +628,8 @@ async function loadAccountsAll() {
             </div>
             <div class="item-card-footer">
                 ${a.channel_type==='kiro'?`<button class="btn btn-xs" onclick="refreshAccountUsageAll(${a.id})">刷新</button>`:''}
-                <button class="btn btn-xs" onclick="toggleAccountAll(${a.id},${a.enabled})">${a.enabled?'禁用':'启用'}</button>
-                <button class="btn btn-xs btn-danger" onclick="deleteAccountAll(${a.id})">删除</button>
+                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs" onclick="toggleAccountAll(${a.id},${a.enabled})">${a.enabled?'禁用':'启用'}</button>` : ''}
+                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs btn-danger" onclick="deleteAccountAll(${a.id})">删除</button>` : ''}
             </div>
         </div>
     `).join('');
@@ -628,7 +647,15 @@ async function deleteAccountAll(id) { if (confirm('确认删除此账号？')) {
 // Users (Card with token stats)
 async function loadUsers() {
     const users = await API.get('/api/users');
-    document.getElementById('users-grid').innerHTML = users.map(u => `
+    document.getElementById('users-grid').innerHTML = users.map(u => {
+        const roleText = {
+            'super_admin': '超级管理员',
+            'admin': '管理员',
+            'user': '普通用户'
+        }[u.role] || u.role;
+        const roleClass = (u.role || 'user').replace('_', '-');
+        
+        return `
         <div class="card">
             <div class="card-header">
                 <h3>${u.name || '用户 #' + u.id}</h3>
@@ -638,6 +665,14 @@ async function loadUsers() {
                 <div class="card-info">
                     <span class="label">用户ID:</span>
                     <span class="value">${u.id}</span>
+                </div>
+                <div class="card-info">
+                    <span class="label">邮箱:</span>
+                    <span class="value">${u.email || '-'}</span>
+                </div>
+                <div class="card-info">
+                    <span class="label">角色:</span>
+                    <span class="value"><span class="role-badge ${roleClass}">${roleText}</span></span>
                 </div>
                 <div class="card-info">
                     <span class="label">配额:</span>
@@ -660,17 +695,49 @@ async function loadUsers() {
                 </div>
             </div>
             <div class="card-actions">
+                <button class="btn btn-sm" onclick="editUser(${u.id})">编辑</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id})">删除</button>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function showUserModal() {
     document.getElementById('user-modal-title').textContent = '添加用户';
     document.getElementById('user-id').value = '';
     document.getElementById('user-name').value = '';
+    document.getElementById('user-role').value = 'user';
     document.getElementById('user-quota').value = '-1';
+    document.getElementById('user-modal').classList.add('active');
+}
+
+async function editUser(id) {
+    const users = await API.get('/api/users');
+    const user = users.find(u => u.id === id);
+    if (!user) return;
+    
+    console.log('编辑用户:', user);
+    
+    document.getElementById('user-modal-title').textContent = '编辑用户';
+    document.getElementById('user-id').value = user.id;
+    document.getElementById('user-name').value = user.name;
+    document.getElementById('user-role').value = user.role || 'user';
+    document.getElementById('user-quota').value = user.quota;
+    
+    console.log('表单已填充:', {
+        id: document.getElementById('user-id').value,
+        name: document.getElementById('user-name').value,
+        role: document.getElementById('user-role').value,
+        quota: document.getElementById('user-quota').value
+    });
+    
+    // 添加角色选择监听器
+    const roleSelect = document.getElementById('user-role');
+    roleSelect.onchange = function() {
+        console.log('角色已更改为:', this.value);
+    };
+    
     document.getElementById('user-modal').classList.add('active');
 }
 
@@ -678,9 +745,44 @@ async function deleteUser(id) { if (confirm('确认删除此用户？')) { await
 
 document.getElementById('user-form').addEventListener('submit', async e => {
     e.preventDefault();
-    await API.post('/api/users', { name: document.getElementById('user-name').value, quota: parseInt(document.getElementById('user-quota').value) });
-    closeModal('user-modal');
-    loadUsers();
+    const id = document.getElementById('user-id').value;
+    const nameValue = document.getElementById('user-name').value;
+    const roleValue = document.getElementById('user-role').value;
+    const quotaValue = document.getElementById('user-quota').value;
+    
+    console.log('表单提交时的原始值:', {
+        id: id,
+        name: nameValue,
+        role: roleValue,
+        quota: quotaValue
+    });
+    
+    const data = {
+        name: nameValue,
+        role: roleValue,
+        quota: parseInt(quotaValue)
+    };
+    
+    console.log('提交用户表单:', { id, data });
+    
+    try {
+        if (id) {
+            console.log(`更新用户 ${id}:`, data);
+            const result = await API.put(`/api/users/${id}`, data);
+            console.log('更新结果:', result);
+        } else {
+            console.log('创建新用户:', data);
+            const result = await API.post('/api/users', data);
+            console.log('创建结果:', result);
+        }
+        
+        closeModal('user-modal');
+        await loadUsers();
+        console.log('用户列表已刷新');
+    } catch (error) {
+        console.error('保存用户失败:', error);
+        alert('保存失败: ' + error.message);
+    }
 });
 
 // Logs (Table)
@@ -723,7 +825,7 @@ function showImportModal() {
 
 async function showImportModalWithChannel() {
     // Show channel selector in import modal
-    const channels = await API.get('/api/channels');
+    const channels = await API.get('/api/providers');
     const selectGroup = document.getElementById('import-channel-group');
     const select = document.getElementById('import-channel-select');
     
@@ -810,13 +912,25 @@ function closeModal(id) { document.getElementById(id).classList.remove('active')
 
 // ===== Token Management =====
 async function loadTokens() {
-    const tokens = await API.get('/api/tokens');
+    // All users (including super_admin) only see their own tokens
+    const endpoint = '/api/auth/tokens';
+    const tokens = await API.get(endpoint);
+    
+    // Show "Add Token" button for all users (super_admin and regular users)
+    const tokenActions = document.getElementById('token-actions');
+    if (tokenActions) {
+        // Hide for admin, show for super_admin and user
+        tokenActions.style.display = window.userRole === 'admin' ? 'none' : '';
+    }
     
     const grid = document.getElementById('tokens-grid');
     grid.innerHTML = tokens.map(t => {
         const statusText = {1: '启用', 2: '禁用', 4: '已过期'}[t.status] || '未知';
         const statusClass = {1: 'success', 2: 'warning', 4: 'error'}[t.status] || '';
         const expiredText = t.expired_time === -1 ? '永不过期' : formatDate(t.expired_time * 1000);
+        
+        // Only super_admin can edit/delete tokens
+        const canEdit = window.userRole === 'super_admin';
         
         return `
             <div class="card">
@@ -838,7 +952,7 @@ async function loadTokens() {
                     </div>
                     <div class="card-info">
                         <span class="label">分组:</span>
-                        <span class="value">${t.group}</span>
+                        <span class="value">${t.group || 'default'}</span>
                     </div>
                     ${t.rpm_limit > 0 || t.tpm_limit > 0 ? `
                     <div class="card-info">
@@ -874,10 +988,12 @@ async function loadTokens() {
                         </div>
                     </div>
                 </div>
+                ${canEdit ? `
                 <div class="card-actions">
                     <button class="btn btn-sm" onclick="editToken(${t.id})">编辑</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteToken(${t.id}, '${t.name}')">删除</button>
                 </div>
+                ` : ''}
             </div>
         `;
     }).join('');
@@ -898,8 +1014,14 @@ async function showTokenModal() {
     document.getElementById('token-modal-title').textContent = '添加令牌';
     document.getElementById('token-id').value = '';
     document.getElementById('token-name').value = '';
-    document.getElementById('token-unlimited-quota').checked = false;
-    document.getElementById('token-remain-quota').value = '100000';
+    
+    // Set user_id to current user's id
+    if (currentUser) {
+        document.getElementById('token-user-id').value = currentUser.id;
+    } else {
+        document.getElementById('token-user-id').value = '0';
+    }
+    
     document.getElementById('token-expired-time').value = '';
     document.getElementById('token-model-limits-enabled').checked = false;
     document.getElementById('token-model-limits').value = '';
@@ -909,7 +1031,6 @@ async function showTokenModal() {
     document.getElementById('token-rpm-limit').value = '0';
     document.getElementById('token-tpm-limit').value = '0';
     
-    toggleTokenQuotaField();
     toggleTokenModelsField();
     document.getElementById('token-modal').classList.add('active');
 }
@@ -922,8 +1043,7 @@ async function editToken(id) {
     document.getElementById('token-modal-title').textContent = '编辑令牌';
     document.getElementById('token-id').value = token.id;
     document.getElementById('token-name').value = token.name;
-    document.getElementById('token-unlimited-quota').checked = token.unlimited_quota;
-    document.getElementById('token-remain-quota').value = token.remain_quota;
+    document.getElementById('token-user-id').value = token.user_id || 0;
     
     if (token.expired_time !== -1) {
         const date = new Date(token.expired_time * 1000);
@@ -940,7 +1060,6 @@ async function editToken(id) {
     document.getElementById('token-rpm-limit').value = token.rpm_limit || 0;
     document.getElementById('token-tpm-limit').value = token.tpm_limit || 0;
     
-    toggleTokenQuotaField();
     toggleTokenModelsField();
     document.getElementById('token-modal').classList.add('active');
 }
@@ -951,6 +1070,17 @@ async function deleteToken(id, name) {
     alert('删除成功');
     loadTokens();
 }
+
+function toggleTokenModelsField() {
+    const enabled = document.getElementById('token-model-limits-enabled').checked;
+    const group = document.getElementById('token-model-limits-group');
+    if (group) {
+        group.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+// Token form event listeners
+document.getElementById('token-model-limits-enabled')?.addEventListener('change', toggleTokenModelsField);
 
 function toggleTokenModelLimits() {
     const enabled = document.getElementById('token-model-limits-enabled').checked;
@@ -995,5 +1125,173 @@ document.getElementById('token-form').addEventListener('submit', async e => {
     loadTokens();
 });
 
+// ==================== User Profile & Auth ====================
+
+let currentUser = null;
+
+// Load current user info
+async function loadCurrentUser() {
+    try {
+        currentUser = await API.get('/api/auth/me');
+        
+        // Update sidebar user info
+        const email = currentUser.email || '';
+        const name = currentUser.name || '';
+        const role = currentUser.role || 'user';
+        
+        document.getElementById('user-email').textContent = email;
+        document.getElementById('user-avatar-text').textContent = (name || email).charAt(0).toUpperCase();
+        
+        // Set role badge
+        const roleText = {
+            'super_admin': '超级管理员',
+            'admin': '管理员',
+            'user': '普通用户'
+        }[role] || role;
+        document.getElementById('current-user-role').textContent = roleText;
+        
+        // Apply permission-based UI control
+        applyPermissions(currentUser);
+        
+    } catch (err) {
+        console.error('Failed to load user:', err);
+        // If failed, redirect to login
+        window.location.href = '/login';
+    }
+}
+
+// Apply permission-based UI control
+function applyPermissions(user) {
+    const role = user.role;
+    const permissions = user.permissions || {};
+    
+    // Hide menu items based on role
+    const menuItems = document.querySelectorAll('.nav-menu li');
+    menuItems.forEach(item => {
+        const link = item.querySelector('a');
+        const page = link.getAttribute('data-page');
+        
+        // Hide users page for admin and regular users
+        if ((role === 'admin' || role === 'user') && page === 'users') {
+            item.style.display = 'none';
+        }
+        
+        // Regular users can access: dashboard, tokens, profile
+        // Hide: channels, accounts, logs
+        if (role === 'user' && ['channels', 'accounts', 'logs'].includes(page)) {
+            item.style.display = 'none';
+        }
+        
+        // Admin can access all except users
+        // (already handled above)
+    });
+    
+    // Hide dashboard sections for non-super_admin users
+    if (role !== 'super_admin') {
+        // Hide channel stats section
+        const channelStatsSection = document.getElementById('channel-stats-section');
+        if (channelStatsSection) {
+            channelStatsSection.style.display = 'none';
+        }
+        
+        // Hide top users section
+        const topUsersSection = document.getElementById('top-users-section');
+        if (topUsersSection) {
+            topUsersSection.style.display = 'none';
+        }
+    }
+    
+    // Store permissions globally for later use
+    window.userPermissions = permissions;
+    window.userRole = role;
+}
+
+// Logout
+async function logout() {
+    if (!confirm('确定要退出登录吗？')) return;
+    
+    try {
+        await API.post('/api/auth/logout');
+        window.location.href = '/login';
+    } catch (err) {
+        console.error('Logout failed:', err);
+        // Force redirect anyway
+        window.location.href = '/login';
+    }
+}
+
+// Load profile page
+async function loadProfile() {
+    if (!currentUser) {
+        await loadCurrentUser();
+    }
+    
+    // Basic info
+    document.getElementById('profile-email').textContent = currentUser.email || '-';
+    document.getElementById('profile-name').textContent = currentUser.name || '-';
+    document.getElementById('profile-last-login').textContent = currentUser.last_login_at || '-';
+    
+    // Role badge
+    const role = currentUser.role || 'user';
+    const roleText = {
+        'super_admin': '超级管理员',
+        'admin': '管理员',
+        'user': '普通用户'
+    }[role] || role;
+    const roleClass = role.replace('_', '-');
+    document.getElementById('profile-role-badge').innerHTML = `<span class="role-badge ${roleClass}">${roleText}</span>`;
+    
+    // Usage stats
+    document.getElementById('profile-total-tokens').textContent = formatTokens(currentUser.total_tokens || 0);
+    document.getElementById('profile-input-tokens').textContent = formatTokens(currentUser.input_tokens || 0);
+    document.getElementById('profile-output-tokens').textContent = formatTokens(currentUser.output_tokens || 0);
+    
+    const quota = currentUser.quota || 0;
+    const usedQuota = currentUser.used_quota || 0;
+    if (quota === -1) {
+        document.getElementById('profile-quota').textContent = '无限制';
+    } else {
+        document.getElementById('profile-quota').textContent = `${formatTokens(usedQuota)} / ${formatTokens(quota)}`;
+    }
+}
+
+// Change password
+async function changePassword() {
+    const oldPassword = document.getElementById('old-password').value;
+    const newPassword = document.getElementById('new-password').value;
+    const confirmPassword = document.getElementById('confirm-password').value;
+    
+    if (newPassword !== confirmPassword) {
+        alert('两次输入的新密码不一致！');
+        return;
+    }
+    
+    if (newPassword.length < 6) {
+        alert('新密码长度至少为6位！');
+        return;
+    }
+    
+    try {
+        await API.post('/api/auth/change-password', {
+            old_password: oldPassword,
+            new_password: newPassword
+        });
+        
+        alert('密码修改成功！请重新登录。');
+        window.location.href = '/login';
+    } catch (err) {
+        alert('密码修改失败：' + (err.message || '未知错误'));
+    }
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Init
-loadDashboard();
+loadCurrentUser().then(() => {
+    loadDashboard();
+});
