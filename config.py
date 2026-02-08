@@ -16,3 +16,10 @@ SUPER_ADMIN_NAME = os.getenv('SUPER_ADMIN_NAME', 'Super Admin')
 
 # Initial invite code for first user registration
 INITIAL_INVITE_CODE = os.getenv('INITIAL_INVITE_CODE', 'WELCOME2024')
+
+# Content cleaning configuration
+CONTENT_CLEANING_ENABLED = os.getenv('CONTENT_CLEANING_ENABLED', 'true').lower() == 'true'
+CLEAN_SPECIAL_CHARS = os.getenv('CLEAN_SPECIAL_CHARS', 'true').lower() == 'true'
+NORMALIZE_WHITESPACE = os.getenv('NORMALIZE_WHITESPACE', 'true').lower() == 'true'
+FIX_CODE_FORMATTING = os.getenv('FIX_CODE_FORMATTING', 'true').lower() == 'true'
+REMOVE_DEBUG_MARKERS = os.getenv('REMOVE_DEBUG_MARKERS', 'true').lower() == 'true'

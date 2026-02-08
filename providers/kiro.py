@@ -1,7 +1,9 @@
+# -*- coding: utf-8 -*-
 import json
 import uuid
 import re
-import aiohttp
+import httpx
+import time
 from datetime import datetime, timezone
 from models import update_account, add_account_credit_usage
 from urllib.parse import urlencode
@@ -9,7 +11,12 @@ from typing import AsyncIterator
 from .base import BaseProvider
 from utils.logger import logger
 from utils.text import get_content_text, find_real_tag
-from utils.token_counter import count_tokens
+from utils.token_counter import count_tokens, count_request_tokens
+from utils.converters import (
+    convert_anthropic_messages_to_kiro,
+    convert_anthropic_tools_to_kiro,
+    convert_kiro_response_to_anthropic
+)
 
 class KiroProvider(BaseProvider):
     """Kiro Provider - AWS CodeWhisperer based Claude access"""
@@ -106,12 +113,12 @@ class KiroProvider(BaseProvider):
     async def _request_usage_limits(self, access_token: str, region: str, profile_arn: str | None) -> dict:
         url = self._build_usage_limits_url(region, profile_arn)
         headers = self._build_headers(access_token)
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise Exception(f"Kiro usage limits error ({resp.status}): {error_text}")
-                return await resp.json(content_type=None)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code != 200:
+                error_text = response.text
+                raise Exception(f"Kiro usage limits error ({response.status_code}): {error_text}")
+            return response.json()
 
     def extract_kiro_points(self, usage_data: dict) -> tuple[int, int]:
         """Extract total usage and limit from Kiro usage data.
@@ -201,8 +208,12 @@ class KiroProvider(BaseProvider):
     async def get_usage_limits(self, api_key: str, account_id: int | None = None) -> dict:
         try:
             creds = json.loads(api_key) if isinstance(api_key, str) else dict(api_key)
-        except Exception:
-            raise Exception("Invalid Kiro credentials")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Kiro credentials JSON in get_usage_limits: {e}")
+            raise Exception(f"Invalid Kiro credentials. JSON parse error: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error parsing Kiro credentials in get_usage_limits: {e}")
+            raise Exception(f"Invalid Kiro credentials: {e}")
         access_token = creds.get("accessToken") or creds.get("access_token")
         refresh_token = creds.get("refreshToken") or creds.get("refresh_token")
         client_id = creds.get("clientId") or creds.get("client_id")
@@ -266,277 +277,51 @@ class KiroProvider(BaseProvider):
         return self.THINKING_MODE_TAG in text or self.THINKING_MAX_LEN_TAG in text
     
     def _build_request(self, messages: list, model: str, system: str = None, tools: list = None, thinking: dict = None) -> dict:
+        """Build Kiro request using converters.py"""
         conversation_id = str(uuid.uuid4())
         kiro_model = self.get_mapped_model(model)
+        
+        # Handle thinking prefix (Kiro-specific feature)
         system_prompt = get_content_text(system) if system else ""
-        processed_messages = list(messages)
-        if not processed_messages:
-            raise Exception("No messages provided")
-
         thinking_prefix = self._generate_thinking_prefix(thinking)
         if thinking_prefix:
             if not system_prompt:
                 system_prompt = thinking_prefix
             elif not self._has_thinking_prefix(system_prompt):
                 system_prompt = f"{thinking_prefix}\n{system_prompt}"
-
-        last_message = processed_messages[-1]
-        if last_message.get("role") == "assistant":
-            last_content = last_message.get("content")
-            if isinstance(last_content, list) and last_content:
-                first_part = last_content[0]
-                if isinstance(first_part, dict) and first_part.get("type") == "text" and first_part.get("text") == "{":
-                    processed_messages.pop()
-                    if not processed_messages:
-                        raise Exception("No messages provided")
-
-        merged_messages = []
-        for message in processed_messages:
-            current = dict(message)
-            content = current.get("content")
-            if isinstance(content, list):
-                current["content"] = list(content)
-            if not merged_messages:
-                merged_messages.append(current)
-                continue
-            last_msg = merged_messages[-1]
-            if current.get("role") == last_msg.get("role"):
-                last_content = last_msg.get("content")
-                cur_content = current.get("content")
-                if isinstance(last_content, list) and isinstance(cur_content, list):
-                    last_content.extend(cur_content)
-                elif isinstance(last_content, str) and isinstance(cur_content, str):
-                    last_msg["content"] = f"{last_content}\n{cur_content}"
-                elif isinstance(last_content, list) and isinstance(cur_content, str):
-                    last_content.append({"type": "text", "text": cur_content})
-                elif isinstance(last_content, str) and isinstance(cur_content, list):
-                    last_msg["content"] = [{"type": "text", "text": last_content}] + cur_content
-                else:
-                    last_msg["content"] = f"{get_content_text(last_msg)}\n{get_content_text(current)}"
-            else:
-                merged_messages.append(current)
-
-        processed_messages = merged_messages
-
-        tools_context = {}
-        if tools and isinstance(tools, list) and tools:
-            filtered_tools = []
-            for tool in tools:
-                name = (tool.get("name") or "").lower()
-                if name in {"web_search", "websearch"}:
-                    continue
-                filtered_tools.append(tool)
-            if filtered_tools:
-                kiro_tools = []
-                for tool in filtered_tools:
-                    description = tool.get("description", "") or ""
-                    if len(description) > 9216:
-                        description = description[:9216] + "..."
-                    kiro_tools.append({
-                        "toolSpecification": {
-                            "name": tool.get("name", ""),
-                            "description": description,
-                            "inputSchema": {"json": tool.get("input_schema", {})}
-                        }
-                    })
-                if kiro_tools:
-                    tools_context = {"tools": kiro_tools}
-
-        def _dedupe_tool_results(tool_results: list) -> list:
-            seen_ids = set()
-            unique_results = []
-            for tr in tool_results:
-                tool_id = tr.get("toolUseId")
-                if tool_id and tool_id not in seen_ids:
-                    seen_ids.add(tool_id)
-                    unique_results.append(tr)
-            return unique_results
-
-        history = []
-        start_index = 0
-        if system_prompt:
-            if processed_messages[0].get("role") == "user":
-                first_user_content = get_content_text(processed_messages[0])
-                history.append({
-                    "userInputMessage": {
-                        "content": f"{system_prompt}\n\n{first_user_content}",
-                        "modelId": kiro_model,
-                        "origin": "AI_EDITOR"
-                    }
-                })
-                start_index = 1
-            else:
-                history.append({
-                    "userInputMessage": {
-                        "content": system_prompt,
-                        "modelId": kiro_model,
-                        "origin": "AI_EDITOR"
-                    }
-                })
-
-        keep_image_threshold = 5
-        for i in range(start_index, len(processed_messages) - 1):
-            message = processed_messages[i]
-            role = message.get("role")
-            distance_from_end = (len(processed_messages) - 1) - i
-            should_keep_images = distance_from_end <= keep_image_threshold
-            if role == "user":
-                user_input_message = {
-                    "content": "",
-                    "modelId": kiro_model,
-                    "origin": "AI_EDITOR"
-                }
-                image_count = 0
-                tool_results = []
-                images = []
-                if isinstance(message.get("content"), list):
-                    for part in message["content"]:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            user_input_message["content"] += part.get("text", "")
-                        elif isinstance(part, dict) and part.get("type") == "tool_result":
-                            tool_results.append({
-                                "content": [{"text": get_content_text(part.get("content"))}],
-                                "status": part.get("status", "success"),
-                                "toolUseId": part.get("tool_use_id", "")
-                            })
-                        elif isinstance(part, dict) and part.get("type") == "image":
-                            source = part.get("source", {})
-                            media_type = source.get("media_type", "")
-                            data = source.get("data", "")
-                            if should_keep_images and media_type and data:
-                                images.append({
-                                    "format": media_type.split("/")[-1],
-                                    "source": {"bytes": data}
-                                })
-                            else:
-                                image_count += 1
-                        elif isinstance(part, str):
-                            user_input_message["content"] += part
-                else:
-                    user_input_message["content"] = get_content_text(message)
-                if images:
-                    user_input_message["images"] = images
-                if image_count > 0:
-                    placeholder = f"[此消息包含 {image_count} 张图片，已在历史记录中省略]"
-                    user_input_message["content"] = user_input_message["content"] + "\n" + placeholder if user_input_message["content"] else placeholder
-                if tool_results:
-                    unique_tool_results = _dedupe_tool_results(tool_results)
-                    if unique_tool_results:
-                        user_input_message["userInputMessageContext"] = {"toolResults": unique_tool_results}
-                if not user_input_message["content"]:
-                    user_input_message["content"] = "Tool results provided." if tool_results else "Continue"
-                history.append({"userInputMessage": user_input_message})
-            elif role == "assistant":
-                assistant_response_message = {"content": ""}
-                tool_uses = []
-                thinking_text = ""
-                if isinstance(message.get("content"), list):
-                    for part in message["content"]:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            assistant_response_message["content"] += part.get("text", "")
-                        elif isinstance(part, dict) and part.get("type") == "thinking":
-                            thinking_text += part.get("thinking") or part.get("text", "")
-                        elif isinstance(part, dict) and part.get("type") == "tool_use":
-                            tool_uses.append({
-                                "input": part.get("input"),
-                                "name": part.get("name"),
-                                "toolUseId": part.get("id")
-                            })
-                else:
-                    assistant_response_message["content"] = get_content_text(message)
-                if thinking_text:
-                    assistant_response_message["content"] = assistant_response_message["content"] or ""
-                    assistant_response_message["content"] = f"{self.THINKING_START_TAG}{thinking_text}{self.THINKING_END_TAG}\n\n{assistant_response_message['content']}" if assistant_response_message["content"] else f"{self.THINKING_START_TAG}{thinking_text}{self.THINKING_END_TAG}"
-                if tool_uses:
-                    assistant_response_message["toolUses"] = tool_uses
-                history.append({"assistantResponseMessage": assistant_response_message})
-
-        current_message = processed_messages[-1]
-        current_content = ""
-        current_tool_results = []
-        current_images = []
-        if current_message.get("role") == "assistant":
-            assistant_response_message = {"content": "", "toolUses": []}
-            thinking_text = ""
-            if isinstance(current_message.get("content"), list):
-                for part in current_message["content"]:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        assistant_response_message["content"] += part.get("text", "")
-                    elif isinstance(part, dict) and part.get("type") == "thinking":
-                        thinking_text += part.get("thinking") or part.get("text", "")
-                    elif isinstance(part, dict) and part.get("type") == "tool_use":
-                        assistant_response_message["toolUses"].append({
-                            "input": part.get("input"),
-                            "name": part.get("name"),
-                            "toolUseId": part.get("id")
-                        })
-            else:
-                assistant_response_message["content"] = get_content_text(current_message)
-            if thinking_text:
-                assistant_response_message["content"] = assistant_response_message["content"] or ""
-                assistant_response_message["content"] = f"{self.THINKING_START_TAG}{thinking_text}{self.THINKING_END_TAG}\n\n{assistant_response_message['content']}" if assistant_response_message["content"] else f"{self.THINKING_START_TAG}{thinking_text}{self.THINKING_END_TAG}"
-            if not assistant_response_message["toolUses"]:
-                assistant_response_message.pop("toolUses", None)
-            history.append({"assistantResponseMessage": assistant_response_message})
-            current_content = "Continue"
-        else:
-            if history:
-                last_history_item = history[-1]
-                if "assistantResponseMessage" not in last_history_item:
-                    history.append({"assistantResponseMessage": {"content": "Continue"}})
-            if isinstance(current_message.get("content"), list):
-                for part in current_message["content"]:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        current_content += part.get("text", "")
-                    elif isinstance(part, dict) and part.get("type") == "tool_result":
-                        current_tool_results.append({
-                            "content": [{"text": get_content_text(part.get("content"))}],
-                            "status": part.get("status", "success"),
-                            "toolUseId": part.get("tool_use_id", "")
-                        })
-                    elif isinstance(part, dict) and part.get("type") == "image":
-                        source = part.get("source", {})
-                        media_type = source.get("media_type", "")
-                        data = source.get("data", "")
-                        if media_type and data:
-                            current_images.append({
-                                "format": media_type.split("/")[-1],
-                                "source": {"bytes": data}
-                            })
-                    elif isinstance(part, str):
-                        current_content += part
-            else:
-                current_content = get_content_text(current_message)
-            if not current_content:
-                current_content = "Tool results provided." if current_tool_results else "Continue"
-
+        
+        # Use converters to transform messages and tools
+        user_content, history, tool_results = convert_anthropic_messages_to_kiro(messages, system_prompt)
+        kiro_tools = convert_anthropic_tools_to_kiro(tools) if tools else []
+        
+        # Build the request structure
         request = {
             "conversationState": {
                 "chatTriggerType": "MANUAL",
                 "conversationId": conversation_id,
-                "currentMessage": {}
+                "currentMessage": {
+                    "userInputMessage": {
+                        "content": user_content,
+                        "modelId": kiro_model,
+                        "origin": "AI_EDITOR"
+                    }
+                }
             }
         }
+        
+        # Add history if present
         if history:
             request["conversationState"]["history"] = history
-
-        user_input_message = {
-            "content": current_content,
-            "modelId": kiro_model,
-            "origin": "AI_EDITOR"
-        }
-        if current_images:
-            user_input_message["images"] = current_images
-
-        user_input_message_context = {}
-        if current_tool_results:
-            user_input_message_context["toolResults"] = _dedupe_tool_results(current_tool_results)
-        if tools_context.get("tools"):
-            user_input_message_context["tools"] = tools_context["tools"]
-        if user_input_message_context:
-            user_input_message["userInputMessageContext"] = user_input_message_context
-
-        request["conversationState"]["currentMessage"]["userInputMessage"] = user_input_message
+        
+        # Add tool_results and tools to context
+        if tool_results or kiro_tools:
+            context = {}
+            if tool_results:
+                context["toolResults"] = tool_results
+            if kiro_tools:
+                context["tools"] = kiro_tools
+            request["conversationState"]["currentMessage"]["userInputMessage"]["userInputMessageContext"] = context
+        
         return request
     
     def _parse_response(self, raw_data: str) -> tuple[str, list]:
@@ -590,6 +375,95 @@ class KiroProvider(BaseProvider):
             tool_calls.append(self._finalize_tool(current_tool))
         
         return full_content, tool_calls
+
+    def _parse_aws_event_stream_binary(self, raw_content: bytes) -> list:
+        """
+        解析 AWS event-stream 二进制格式
+        格式: [prelude (12 bytes)][headers][payload][message CRC (4 bytes)]
+        
+        参考 KiroProxy 实现，更稳定地解析 AWS 响应
+        """
+        events = []
+        pos = 0
+        
+        while pos < len(raw_content):
+            if pos + 12 > len(raw_content):
+                break
+            
+            # 读取 prelude: total_length (4) + headers_length (4) + prelude_crc (4)
+            total_length = int.from_bytes(raw_content[pos:pos+4], 'big')
+            headers_length = int.from_bytes(raw_content[pos+4:pos+8], 'big')
+            
+            if total_length == 0 or total_length > len(raw_content) - pos:
+                break
+            
+            # 解析 headers 以提取 event-type
+            event_type = None
+            headers_start = pos + 12
+            headers_end = headers_start + headers_length
+            header_pos = headers_start
+            
+            while header_pos < headers_end:
+                if header_pos + 1 > headers_end:
+                    break
+                    
+                # 读取 header name length
+                name_len = raw_content[header_pos]
+                header_pos += 1
+                
+                if header_pos + name_len > headers_end:
+                    break
+                    
+                # 读取 header name
+                header_name = raw_content[header_pos:header_pos + name_len].decode('utf-8', errors='ignore')
+                header_pos += name_len
+                
+                if header_pos + 1 > headers_end:
+                    break
+                    
+                # 读取 header value type (7 = string)
+                value_type = raw_content[header_pos]
+                header_pos += 1
+                
+                if header_pos + 2 > headers_end:
+                    break
+                    
+                # 读取 header value length
+                value_len = int.from_bytes(raw_content[header_pos:header_pos + 2], 'big')
+                header_pos += 2
+                
+                if header_pos + value_len > headers_end:
+                    break
+                    
+                # 读取 header value
+                if header_name == ":event-type":
+                    event_type = raw_content[header_pos:header_pos + value_len].decode('utf-8', errors='ignore')
+                
+                header_pos += value_len
+            
+            # 提取 payload
+            payload_start = pos + 12 + headers_length
+            payload_end = pos + total_length - 4  # 减去 message CRC
+            
+            if payload_start < payload_end:
+                payload = raw_content[payload_start:payload_end]
+                try:
+                    payload_text = payload.decode('utf-8')
+                    if payload_text.strip():
+                        payload_json = json.loads(payload_text)
+                        
+                        # 返回完整的事件结构，包含 event_type 和 payload
+                        events.append({
+                            "event_type": event_type,
+                            "payload": payload_json
+                        })
+                            
+                except Exception as e:
+                    logger.debug(f"解析 payload 失败: {e}")
+            
+            pos += total_length
+        
+        return events
 
     def _parse_aws_event_stream_buffer(self, buffer: str) -> tuple[list, str]:
         events = []
@@ -672,48 +546,26 @@ class KiroProvider(BaseProvider):
             remaining = remaining[search_start:]
         return events, remaining
 
-    def _estimate_input_tokens(self, messages: list, system: str = None, tools: list = None, thinking: dict = None) -> int:
-        total = 0
-        if system:
-            total += count_tokens(get_content_text(system))
-        if thinking and thinking.get("type") == "enabled":
-            budget = self._normalize_thinking_budget_tokens(thinking.get("budget_tokens"))
-            prefix_text = f"{self.THINKING_MODE_TAG}enabled{self.THINKING_MODE_TAG.replace('<', '</')}{self.THINKING_MAX_LEN_TAG}{budget}{self.THINKING_MAX_LEN_TAG.replace('<', '</')}"
-            total += count_tokens(prefix_text)
-        for message in messages or []:
-            content = message.get("content")
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict):
-                        part_type = part.get("type")
-                        if part_type == "text":
-                            total += count_tokens(part.get("text") or "")
-                        elif part_type == "thinking":
-                            total += count_tokens(part.get("thinking") or part.get("text") or "")
-                        elif part_type == "tool_result":
-                            total += count_tokens(get_content_text(part.get("content")))
-                        elif part_type == "tool_use":
-                            total += count_tokens(part.get("name") or "")
-                            total += count_tokens(json.dumps(part.get("input") or {}, ensure_ascii=False))
-                        elif part_type == "image":
-                            total += 1600
-                        elif part_type == "document":
-                            source = part.get("source") or {}
-                            data = source.get("data")
-                            if data:
-                                estimated_chars = int(len(data) * 0.75)
-                                total += max(1, (estimated_chars + 3) // 4)
-                    elif isinstance(part, str):
-                        total += count_tokens(part)
-            else:
-                total += count_tokens(get_content_text(message))
-        if tools and isinstance(tools, list):
-            for tool in tools:
-                total += count_tokens(tool.get("name") or "")
-                total += count_tokens(tool.get("description") or "")
-                schema = tool.get("input_schema") or {}
-                total += count_tokens(json.dumps(schema, ensure_ascii=False))
-        return total
+    def _estimate_input_tokens(self, messages: list, system: str = None, tools: list = None, thinking: dict = None, model: str = "") -> int:
+        """Estimate input tokens using the unified token counter utility
+        
+        Args:
+            messages: List of messages
+            system: System message
+            tools: List of tool definitions
+            thinking: Thinking configuration dict
+            model: Model name for provider-specific estimation
+        
+        Returns:
+            Estimated input token count
+        """
+        return count_request_tokens(
+            messages=messages or [],
+            system=system or "",
+            tools=tools,
+            model=model,
+            thinking_config=thinking
+        )
     
     def _finalize_tool(self, tool: dict) -> dict:
         """Convert internal tool format to Claude format"""
@@ -729,6 +581,74 @@ class KiroProvider(BaseProvider):
             "name": tool["name"],
             "input": input_obj
         }
+    
+    async def _refresh_token(self, refresh_token: str, client_id: str, client_secret: str, region: str) -> str:
+        """Refresh access token using refresh token"""
+        try:
+            sso_url = f"https://oidc.{region}.amazonaws.com/token"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    sso_url,
+                    json={
+                        "clientId": client_id,
+                        "clientSecret": client_secret,
+                        "refreshToken": refresh_token,
+                        "grantType": "refresh_token"
+                    },
+                    headers={"Content-Type": "application/json"}
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    new_access_token = data.get("accessToken")
+                    expires_in = data.get("expiresIn", 3600)  # Default 1 hour in seconds
+                    if new_access_token:
+                        # Return both token and expiry time
+                        return {
+                            "accessToken": new_access_token,
+                            "expiresIn": expires_in,
+                            "refreshedAt": int(datetime.now(timezone.utc).timestamp())
+                        }
+                    else:
+                        logger.error("Token refresh response missing accessToken")
+                        return None
+                else:
+                    error = response.text
+                    logger.error(f"Token refresh failed ({response.status_code}): {error}")
+                    return None
+        except Exception as e:
+            logger.error(f"Token refresh error: {e}")
+            return None
+    
+    def _is_token_expired(self, creds: dict) -> bool:
+        """Check if access token is expired or about to expire"""
+        refreshed_at = creds.get("refreshedAt", 0)
+        expires_in = creds.get("expiresIn", 3600)
+        
+        # Handle credentials saved by JavaScript implementation (uses expiresAt instead of refreshedAt)
+        if refreshed_at == 0 and "expiresAt" in creds:
+            try:
+                expires_at_str = creds.get("expiresAt")
+                if expires_at_str:
+                    # Parse ISO format and convert to Unix timestamp
+                    expires_at_dt = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+                    expires_at_timestamp = int(expires_at_dt.timestamp())
+                    
+                    # Calculate refreshedAt from expiresAt - expiresIn
+                    refreshed_at = expires_at_timestamp - expires_in
+                    logger.info(f"Converted expiresAt '{expires_at_str}' to refreshedAt={refreshed_at}, expiresIn={expires_in}")
+            except Exception as e:
+                logger.warning(f"Failed to parse expiresAt from credentials: {e}")
+        
+        if refreshed_at == 0:
+            # No refresh time recorded and couldn't parse expiresAt, assume expired
+            logger.info(f"No refreshedAt or valid expiresAt found in credentials, assuming token expired")
+            return True
+        
+        current_time = int(datetime.now(timezone.utc).timestamp())
+        # Add 60 second buffer to refresh before actual expiry
+        expiry_time = refreshed_at + expires_in - 60
+        is_expired = current_time >= expiry_time
+        return is_expired
     
     async def chat(self, api_key: str, model: str, data: dict):
         """
@@ -748,8 +668,13 @@ class KiroProvider(BaseProvider):
         """
         try:
             creds = json.loads(api_key)
-        except:
-            raise Exception("Invalid Kiro credentials format. Expected JSON with accessToken.")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Kiro credentials JSON: {e}")
+            logger.error(f"API key preview: {api_key[:100]}..." if len(api_key) > 100 else f"API key: {api_key}")
+            raise Exception(f"Invalid Kiro credentials format. JSON parse error: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error parsing Kiro credentials: {e}")
+            raise Exception(f"Invalid Kiro credentials format. Expected JSON with accessToken. Error: {e}")
         
         access_token = creds.get("accessToken")
         refresh_token = creds.get("refreshToken")
@@ -807,75 +732,15 @@ class KiroProvider(BaseProvider):
                     raise
             else:
                 raise
-    
-    async def _refresh_token(self, refresh_token: str, client_id: str, client_secret: str, region: str) -> str:
-        """Refresh access token using refresh token"""
-        try:
-            sso_url = f"https://oidc.{region}.amazonaws.com/token"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    sso_url,
-                    json={
-                        "clientId": client_id,
-                        "clientSecret": client_secret,
-                        "refreshToken": refresh_token,
-                        "grantType": "refresh_token"
-                    },
-                    headers={"Content-Type": "application/json"}
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        new_access_token = data.get("accessToken")
-                        expires_in = data.get("expiresIn", 3600)  # Default 1 hour in seconds
-                        if new_access_token:
-                            # Return both token and expiry time
-                            return {
-                                "accessToken": new_access_token,
-                                "expiresIn": expires_in,
-                                "refreshedAt": int(datetime.now(timezone.utc).timestamp())
-                            }
-                        else:
-                            logger.error("Token refresh response missing accessToken")
-                            return None
-                    else:
-                        error = await resp.text()
-                        logger.error(f"Token refresh failed ({resp.status}): {error}")
-                        return None
-        except Exception as e:
-            logger.error(f"Token refresh error: {e}")
-            return None
-    
-    def _is_token_expired(self, creds: dict) -> bool:
-        """Check if access token is expired or about to expire"""
-        refreshed_at = creds.get("refreshedAt", 0)
-        expires_in = creds.get("expiresIn", 3600)
-        
-        if refreshed_at == 0:
-            # No refresh time recorded, assume expired
-            logger.info(f"No refreshedAt found in credentials, assuming token expired")
-            return True
-        
-        current_time = int(datetime.now(timezone.utc).timestamp())
-        # Add 60 second buffer to refresh before actual expiry
-        expiry_time = refreshed_at + expires_in - 60
-        
-        is_expired = current_time >= expiry_time
-        if is_expired:
-            logger.info(f"Token expired: current={current_time}, expiry={expiry_time}, refreshed_at={refreshed_at}, expires_in={expires_in}")
-        else:
-            remaining = expiry_time - current_time
-            logger.info(f"Token valid for {remaining} more seconds")
-        
-        return is_expired
-    
-    async def _chat_stream(self, url: str, headers: dict, data: dict, model: str, thinking: dict = None, messages: list = None, system: str = None, tools: list = None, account_id: int | None = None):
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=data) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    logger.error(f"Kiro API error ({resp.status}): {error_text}")
-                    raise Exception(f"Kiro API error: {resp.status}")
+    async def _chat_stream(self, url: str, headers: dict, data: dict, model: str, thinking: dict = None, messages: list = None, system: str = None, tools: list = None, account_id: int | None = None):
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", url, headers=headers, json=data) as resp:
+                if resp.status_code != 200:
+                    error_text = await resp.aread()
+                    logger.error(f"Kiro API error ({resp.status_code}): {error_text}")
+                    raise Exception(f"Kiro API error: {resp.status_code}")
+                
                 start_event = {
                     "type": "message_start",
                     "message": {
@@ -912,22 +777,14 @@ class KiroProvider(BaseProvider):
                         idx = stream_state["next_block_index"]
                         stream_state["next_block_index"] += 1
                         stream_state["thinking_block_index"] = idx
-                        return [{
-                            "type": "content_block_start",
-                            "index": idx,
-                            "content_block": {"type": "thinking", "thinking": ""}
-                        }]
+                        return [{"type": "content_block_start", "index": idx, "content_block": {"type": "thinking", "thinking": ""}}]
                     if block_type == "text":
                         if stream_state["text_block_index"] is not None:
                             return []
                         idx = stream_state["next_block_index"]
                         stream_state["next_block_index"] += 1
                         stream_state["text_block_index"] = idx
-                        return [{
-                            "type": "content_block_start",
-                            "index": idx,
-                            "content_block": {"type": "text", "text": ""}
-                        }]
+                        return [{"type": "content_block_start", "index": idx, "content_block": {"type": "text", "text": ""}}]
                     return []
 
                 def stop_block(index: int | None) -> list:
@@ -939,36 +796,29 @@ class KiroProvider(BaseProvider):
                 def create_text_delta_events(text: str) -> list:
                     events = []
                     events.extend(ensure_block_start("text"))
-                    events.append({
-                        "type": "content_block_delta",
-                        "index": stream_state["text_block_index"],
-                        "delta": {"type": "text_delta", "text": text}
-                    })
+                    events.append({"type": "content_block_delta", "index": stream_state["text_block_index"], "delta": {"type": "text_delta", "text": text}})
                     return events
 
                 def create_thinking_delta_events(thinking_text: str) -> list:
                     events = []
                     events.extend(ensure_block_start("thinking"))
-                    events.append({
-                        "type": "content_block_delta",
-                        "index": stream_state["thinking_block_index"],
-                        "delta": {"type": "thinking_delta", "thinking": thinking_text}
-                    })
+                    events.append({"type": "content_block_delta", "index": stream_state["thinking_block_index"], "delta": {"type": "thinking_delta", "thinking": thinking_text}})
                     return events
 
-                async def push_events(events: list):
+                def push_events_sync(events: list):
+                    result = []
                     for ev in events:
-                        yield f"event: {ev['type']}\ndata: {json.dumps(ev)}\n\n".encode("utf-8")
+                        result.append(f"event: {ev['type']}\ndata: {json.dumps(ev)}\n\n".encode("utf-8"))
+                    return result
 
                 buffer = ""
                 last_content_event = None
                 tool_calls = []
                 current_tool_call = None
                 total_content = ""
-                context_usage_percentage = None
                 usage_delta = None
 
-                async for chunk in resp.content.iter_any():
+                async for chunk in resp.aiter_bytes():
                     buffer += chunk.decode("utf-8", errors="ignore")
                     events, remaining = self._parse_aws_event_stream_buffer(buffer)
                     buffer = remaining
@@ -981,7 +831,7 @@ class KiroProvider(BaseProvider):
                             last_content_event = content_piece
                             total_content += content_piece
                             if not thinking_requested:
-                                async for out in push_events(create_text_delta_events(content_piece)):
+                                for out in push_events_sync(create_text_delta_events(content_piece)):
                                     yield out
                                 continue
                             stream_state["buffer"] += content_piece
@@ -1030,7 +880,7 @@ class KiroProvider(BaseProvider):
                                     if rest:
                                         pending.extend(create_text_delta_events(rest))
                                     break
-                            async for out in push_events(pending):
+                            for out in push_events_sync(pending):
                                 yield out
                         elif event["type"] == "toolUse":
                             tc = event.get("data") or {}
@@ -1048,11 +898,7 @@ class KiroProvider(BaseProvider):
                                         except Exception:
                                             pass
                                         tool_calls.append(current_tool_call)
-                                    current_tool_call = {
-                                        "toolUseId": tc["toolUseId"],
-                                        "name": tc["name"],
-                                        "input": tc.get("input") or ""
-                                    }
+                                    current_tool_call = {"toolUseId": tc["toolUseId"], "name": tc["name"], "input": tc.get("input") or ""}
                                 if tc.get("stop"):
                                     try:
                                         current_tool_call["input"] = json.loads(current_tool_call["input"])
@@ -1074,8 +920,6 @@ class KiroProvider(BaseProvider):
                                     pass
                                 tool_calls.append(current_tool_call)
                                 current_tool_call = None
-                        elif event["type"] == "contextUsage":
-                            context_usage_percentage = event.get("data", {}).get("contextUsagePercentage")
                         elif event["type"] == "usage":
                             usage_data = event.get("data") or {}
                             unit = (usage_data.get("unit") or "").lower()
@@ -1092,27 +936,26 @@ class KiroProvider(BaseProvider):
                     except Exception:
                         pass
                     tool_calls.append(current_tool_call)
-                    current_tool_call = None
 
                 if thinking_requested and stream_state["buffer"]:
                     if stream_state["in_thinking"]:
-                        async for out in push_events(create_thinking_delta_events(stream_state["buffer"])):
+                        for out in push_events_sync(create_thinking_delta_events(stream_state["buffer"])):
                             yield out
                         stream_state["buffer"] = ""
-                        async for out in push_events(create_thinking_delta_events("")):
+                        for out in push_events_sync(create_thinking_delta_events("")):
                             yield out
-                        async for out in push_events(stop_block(stream_state["thinking_block_index"])):
+                        for out in push_events_sync(stop_block(stream_state["thinking_block_index"])):
                             yield out
                     elif not stream_state["thinking_extracted"]:
-                        async for out in push_events(create_text_delta_events(stream_state["buffer"])):
+                        for out in push_events_sync(create_text_delta_events(stream_state["buffer"])):
                             yield out
                         stream_state["buffer"] = ""
                     else:
-                        async for out in push_events(create_text_delta_events(stream_state["buffer"])):
+                        for out in push_events_sync(create_text_delta_events(stream_state["buffer"])):
                             yield out
                         stream_state["buffer"] = ""
 
-                async for out in push_events(stop_block(stream_state["text_block_index"])):
+                for out in push_events_sync(stop_block(stream_state["text_block_index"])):
                     yield out
 
                 if tool_calls:
@@ -1123,24 +966,8 @@ class KiroProvider(BaseProvider):
                         tool_name = tc.get("name") or ""
                         tool_input = tc.get("input")
                         partial_json = tool_input if isinstance(tool_input, str) else json.dumps(tool_input or {})
-                        tool_start = {
-                            "type": "content_block_start",
-                            "index": idx,
-                            "content_block": {
-                                "type": "tool_use",
-                                "id": tool_id,
-                                "name": tool_name,
-                                "input": {}
-                            }
-                        }
-                        tool_delta = {
-                            "type": "content_block_delta",
-                            "index": idx,
-                            "delta": {
-                                "type": "input_json_delta",
-                                "partial_json": partial_json
-                            }
-                        }
+                        tool_start = {"type": "content_block_start", "index": idx, "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name, "input": {}}}
+                        tool_delta = {"type": "content_block_delta", "index": idx, "delta": {"type": "input_json_delta", "partial_json": partial_json}}
                         tool_stop = {"type": "content_block_stop", "index": idx}
                         for ev in [tool_start, tool_delta, tool_stop]:
                             yield f"event: {ev['type']}\ndata: {json.dumps(ev)}\n\n".encode("utf-8")
@@ -1151,23 +978,16 @@ class KiroProvider(BaseProvider):
                 output_tokens = count_tokens(output_text)
                 input_tokens = self._estimate_input_tokens(messages, system, tools, thinking)
                 
-                # Only use usage_delta from usage event, ignore contextUsagePercentage
-                points_delta = usage_delta if usage_delta is not None else None
-                if account_id and points_delta and points_delta > 0:
-                    await add_account_credit_usage(account_id, points_delta)
+                if account_id and usage_delta and usage_delta > 0:
+                    await add_account_credit_usage(account_id, usage_delta)
+                
                 message_delta = {
                     "type": "message_delta",
                     "delta": {"stop_reason": "tool_use" if tool_calls else "end_turn"},
-                    "usage": {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 0
-                    }
+                    "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
                 }
                 yield f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode("utf-8")
-                final_event = {"type": "message_stop"}
-                yield f"event: message_stop\ndata: {json.dumps(final_event)}\n\n".encode("utf-8")
+                yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     
     async def list_models(self, api_key: str) -> list:
         return list(self.MODEL_MAPPING.keys())
