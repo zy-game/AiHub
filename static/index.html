@@ -15,18 +15,18 @@
             <button class="theme-toggle" onclick="toggleTheme()" title="切换主题">🌙</button>
         </div>
         <ul class="nav-menu">
-            <li><a href="#" data-page="dashboard" class="active">仪表盘</a></li>
-            <li><a href="#" data-page="channels">渠道</a></li>
-            <li><a href="#" data-page="accounts">账号</a></li>
-            <li><a href="#" data-page="users">用户</a></li>
-            <li><a href="#" data-page="tokens">令牌</a></li>
-            <li><a href="#" data-page="logs">日志</a></li>
-            <li><a href="#" data-page="profile">个人中心</a></li>
-            <li id="risk-control-menu" style="display:none;">
-                <a href="/risk-control" class="nav-link-external">
-                    🛡️ 风控系统
-                </a>
-            </li>
+            <li><a href="#" data-page="dashboard" class="active">📊 仪表盘</a></li>
+            <li><a href="#" data-page="channels">📡 渠道</a></li>
+            <li><a href="#" data-page="accounts">👤 账号</a></li>
+            <li><a href="#" data-page="users">👥 用户</a></li>
+            <li><a href="#" data-page="tokens">🔑 令牌</a></li>
+            <li><a href="#" data-page="logs">📝 日志</a></li>
+            <li><a href="#" data-page="profile">⚙️ 个人中心</a></li>
+            <li id="risk-overview-menu" style="display:none;"><a href="#" data-page="risk-overview">🛡️ 系统概览</a></li>
+            <li id="risk-proxy-menu" style="display:none;"><a href="#" data-page="risk-proxy-pool">🌐 代理池管理</a></li>
+            <li id="risk-health-menu" style="display:none;"><a href="#" data-page="risk-health-monitor">💊 账号健康</a></li>
+            <li id="risk-rate-menu" style="display:none;"><a href="#" data-page="risk-rate-limit">⏱️ 速率限制</a></li>
+            <li id="risk-config-menu" style="display:none;"><a href="#" data-page="risk-config">⚙️ 系统配置</a></li>
         </ul>
         
         <!-- User Info Section -->
@@ -326,6 +326,208 @@
                         </label>
                     </div>
                 </form>
+            </div>
+        </section>
+        
+        <!-- Risk Control: System Overview -->
+        <section id="page-risk-overview" class="page">
+            <div class="page-header">
+                <h1>🛡️ 风控系统概览</h1>
+                <button class="btn btn-primary" onclick="refreshOverview()">刷新</button>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>代理池</h3>
+                    <p id="overview-proxy-status">-</p>
+                </div>
+                <div class="stat-card">
+                    <h3>账号健康</h3>
+                    <p id="overview-health-status">-</p>
+                </div>
+                <div class="stat-card">
+                    <h3>速率限制</h3>
+                    <p id="overview-rate-status">-</p>
+                </div>
+                <div class="stat-card">
+                    <h3>指纹伪装</h3>
+                    <p id="overview-fingerprint-status">-</p>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Risk Control: Proxy Pool -->
+        <section id="page-risk-proxy-pool" class="page">
+            <div class="page-header">
+                <h1>🌐 代理池管理</h1>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="showAddProxyModal()">添加代理</button>
+                    <button class="btn btn-secondary" onclick="healthCheckProxies()">健康检查</button>
+                    <button class="btn btn-secondary" onclick="refreshProxyPool()">刷新</button>
+                </div>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>总代理数</h3>
+                    <p id="proxy-total">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>存活代理</h3>
+                    <p id="proxy-alive">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>失效代理</h3>
+                    <p id="proxy-dead">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>绑定策略</h3>
+                    <p id="proxy-strategy">-</p>
+                </div>
+            </div>
+            <div class="card">
+                <h2>代理列表</h2>
+                <div class="table-container">
+                    <table id="proxy-list-table">
+                        <thead>
+                            <tr>
+                                <th>代理地址</th>
+                                <th>协议</th>
+                                <th>状态</th>
+                                <th>总请求</th>
+                                <th>成功率</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Risk Control: Health Monitor -->
+        <section id="page-risk-health-monitor" class="page">
+            <div class="page-header">
+                <h1>💊 账号健康监控</h1>
+                <button class="btn btn-secondary" onclick="refreshHealthMonitor()">刷新</button>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>总账号数</h3>
+                    <p id="health-total">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>健康账号</h3>
+                    <p id="health-healthy">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>降级账号</h3>
+                    <p id="health-degraded">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>封禁账号</h3>
+                    <p id="health-banned">0</p>
+                </div>
+            </div>
+            <div class="card">
+                <h2>账号健康详情</h2>
+                <div class="table-container">
+                    <table id="health-list-table">
+                        <thead>
+                            <tr>
+                                <th>账号ID</th>
+                                <th>状态</th>
+                                <th>成功率</th>
+                                <th>总请求</th>
+                                <th>失败请求</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Risk Control: Rate Limit -->
+        <section id="page-risk-rate-limit" class="page">
+            <div class="page-header">
+                <h1>⏱️ 速率限制统计</h1>
+                <button class="btn btn-secondary" onclick="refreshRateLimit()">刷新</button>
+            </div>
+            <div class="card">
+                <h2>全局速率限制</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>最近1分钟请求数</h3>
+                        <p id="global-requests">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>最近1分钟Token数</h3>
+                        <p id="global-tokens">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>RPM限制</h3>
+                        <p id="global-rpm-limit">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>TPM限制</h3>
+                        <p id="global-tpm-limit">-</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Risk Control: Config -->
+        <section id="page-risk-config" class="page">
+            <div class="page-header">
+                <h1>⚙️ 系统配置</h1>
+                <button class="btn btn-primary" onclick="saveRiskConfig()">保存配置</button>
+            </div>
+            <div class="card">
+                <h2>代理池配置</h2>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="config-proxy-enabled">
+                        <span>启用代理池</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>绑定策略</label>
+                    <select id="config-proxy-strategy">
+                        <option value="sticky">STICKY - 账号绑定固定代理</option>
+                        <option value="random">RANDOM - 随机选择</option>
+                        <option value="round_robin">ROUND_ROBIN - 轮询</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card">
+                <h2>速率限制配置</h2>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="config-rate-enabled">
+                        <span>启用速率限制</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>RPM（每分钟请求数）</label>
+                    <input type="number" id="config-global-rpm" value="1000" min="1">
+                </div>
+                <div class="form-group">
+                    <label>TPM（每分钟Token数）</label>
+                    <input type="number" id="config-global-tpm" value="1000000" min="1">
+                </div>
+            </div>
+            <div class="card">
+                <h2>健康监控配置</h2>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="config-health-enabled">
+                        <span>启用健康监控</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>检查间隔（秒）</label>
+                    <input type="number" id="config-health-interval" value="60" min="10">
+                </div>
             </div>
         </section>
     </main>

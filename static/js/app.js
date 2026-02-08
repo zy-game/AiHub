@@ -121,7 +121,12 @@ function loadPageData(page) {
         users: loadUsers, 
         tokens: loadTokens, 
         logs: loadLogs,
-        profile: loadProfile
+        profile: loadProfile,
+        'risk-overview': loadRiskOverview,
+        'risk-proxy-pool': loadRiskProxyPool,
+        'risk-health-monitor': loadRiskHealthMonitor,
+        'risk-rate-limit': loadRiskRateLimit,
+        'risk-config': loadRiskConfig
     };
     loaders[page]?.();
 }
@@ -1223,12 +1228,15 @@ function applyPermissions(user) {
     window.userPermissions = permissions;
     window.userRole = role;
     
-    // Show risk control menu for super_admin
+    // Show risk control menus for super_admin
     if (role === 'super_admin') {
-        const riskControlMenu = document.getElementById('risk-control-menu');
-        if (riskControlMenu) {
-            riskControlMenu.style.display = 'block';
-        }
+        const riskMenus = ['risk-overview-menu', 'risk-proxy-menu', 'risk-health-menu', 'risk-rate-menu', 'risk-config-menu'];
+        riskMenus.forEach(menuId => {
+            const menu = document.getElementById(menuId);
+            if (menu) {
+                menu.style.display = 'block';
+            }
+        });
     }
 }
 
@@ -1315,6 +1323,174 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ==================== Risk Control Functions ====================
+
+async function loadRiskOverview() {
+    try {
+        const data = await API.get('/api/risk-control/overview');
+        document.getElementById('overview-proxy-status').textContent = data.proxy_pool?.enabled ? '已启用' : '未启用';
+        document.getElementById('overview-health-status').textContent = data.health_monitor?.enabled ? '已启用' : '未启用';
+        document.getElementById('overview-rate-status').textContent = data.rate_limit?.enabled ? '已启用' : '未启用';
+        document.getElementById('overview-fingerprint-status').textContent = data.fingerprint?.enabled ? '已启用' : '未启用';
+    } catch (err) {
+        console.error('Failed to load risk overview:', err);
+    }
+}
+
+async function refreshOverview() {
+    await loadRiskOverview();
+}
+
+async function loadRiskProxyPool() {
+    try {
+        const data = await API.get('/api/risk-control/proxy-pool');
+        document.getElementById('proxy-total').textContent = data.total || 0;
+        document.getElementById('proxy-alive').textContent = data.alive || 0;
+        document.getElementById('proxy-dead').textContent = data.dead || 0;
+        document.getElementById('proxy-strategy').textContent = data.strategy || '-';
+        
+        const tbody = document.querySelector('#proxy-list-table tbody');
+        if (tbody && data.proxies) {
+            tbody.innerHTML = data.proxies.map(p => `
+                <tr>
+                    <td>${p.host}:${p.port}</td>
+                    <td>${p.protocol || 'http'}</td>
+                    <td>${p.alive ? getBadge('success', '存活') : getBadge('danger', '失效')}</td>
+                    <td>${p.total_requests || 0}</td>
+                    <td>${p.success_rate ? (p.success_rate * 100).toFixed(1) + '%' : '-'}</td>
+                    <td><button class="btn btn-sm btn-danger" onclick="deleteProxy('${p.id}')">删除</button></td>
+                </tr>
+            `).join('');
+        }
+    } catch (err) {
+        console.error('Failed to load proxy pool:', err);
+    }
+}
+
+async function refreshProxyPool() {
+    await loadRiskProxyPool();
+}
+
+function showAddProxyModal() {
+    alert('添加代理功能开发中');
+}
+
+async function healthCheckProxies() {
+    try {
+        await API.post('/api/risk-control/proxy-pool/health-check');
+        alert('健康检查已启动');
+        await loadRiskProxyPool();
+    } catch (err) {
+        alert('健康检查失败：' + (err.message || '未知错误'));
+    }
+}
+
+async function deleteProxy(id) {
+    if (!confirm('确定要删除此代理吗？')) return;
+    try {
+        await API.delete(`/api/risk-control/proxy-pool/${id}`);
+        await loadRiskProxyPool();
+    } catch (err) {
+        alert('删除失败：' + (err.message || '未知错误'));
+    }
+}
+
+async function loadRiskHealthMonitor() {
+    try {
+        const data = await API.get('/api/risk-control/health-monitor');
+        document.getElementById('health-total').textContent = data.total || 0;
+        document.getElementById('health-healthy').textContent = data.healthy || 0;
+        document.getElementById('health-degraded').textContent = data.degraded || 0;
+        document.getElementById('health-banned').textContent = data.banned || 0;
+        
+        const tbody = document.querySelector('#health-list-table tbody');
+        if (tbody && data.accounts) {
+            tbody.innerHTML = data.accounts.map(a => `
+                <tr>
+                    <td>${a.id}</td>
+                    <td>${getBadge(a.status === 'healthy' ? 'success' : a.status === 'degraded' ? 'warning' : 'danger', a.status)}</td>
+                    <td>${a.success_rate ? (a.success_rate * 100).toFixed(1) + '%' : '-'}</td>
+                    <td>${a.total_requests || 0}</td>
+                    <td>${a.failed_requests || 0}</td>
+                    <td><button class="btn btn-sm" onclick="resetAccountHealth(${a.id})">重置</button></td>
+                </tr>
+            `).join('');
+        }
+    } catch (err) {
+        console.error('Failed to load health monitor:', err);
+    }
+}
+
+async function refreshHealthMonitor() {
+    await loadRiskHealthMonitor();
+}
+
+async function resetAccountHealth(accountId) {
+    if (!confirm('确定要重置此账号的健康状态吗？')) return;
+    try {
+        await API.post(`/api/risk-control/health-monitor/${accountId}/reset`);
+        await loadRiskHealthMonitor();
+    } catch (err) {
+        alert('重置失败：' + (err.message || '未知错误'));
+    }
+}
+
+async function loadRiskRateLimit() {
+    try {
+        const data = await API.get('/api/risk-control/rate-limit');
+        document.getElementById('global-requests').textContent = data.global?.requests || 0;
+        document.getElementById('global-tokens').textContent = formatTokens(data.global?.tokens || 0);
+        document.getElementById('global-rpm-limit').textContent = data.global?.rpm_limit || '-';
+        document.getElementById('global-tpm-limit').textContent = formatTokens(data.global?.tpm_limit || 0);
+    } catch (err) {
+        console.error('Failed to load rate limit:', err);
+    }
+}
+
+async function refreshRateLimit() {
+    await loadRiskRateLimit();
+}
+
+async function loadRiskConfig() {
+    try {
+        const data = await API.get('/api/risk-control/config');
+        document.getElementById('config-proxy-enabled').checked = data.proxy_pool?.enabled || false;
+        document.getElementById('config-proxy-strategy').value = data.proxy_pool?.strategy || 'sticky';
+        document.getElementById('config-rate-enabled').checked = data.rate_limit?.enabled || false;
+        document.getElementById('config-global-rpm').value = data.rate_limit?.global_rpm || 1000;
+        document.getElementById('config-global-tpm').value = data.rate_limit?.global_tpm || 1000000;
+        document.getElementById('config-health-enabled').checked = data.health_monitor?.enabled || false;
+        document.getElementById('config-health-interval').value = data.health_monitor?.interval || 60;
+    } catch (err) {
+        console.error('Failed to load risk config:', err);
+    }
+}
+
+async function saveRiskConfig() {
+    try {
+        const config = {
+            proxy_pool: {
+                enabled: document.getElementById('config-proxy-enabled').checked,
+                strategy: document.getElementById('config-proxy-strategy').value
+            },
+            rate_limit: {
+                enabled: document.getElementById('config-rate-enabled').checked,
+                global_rpm: parseInt(document.getElementById('config-global-rpm').value),
+                global_tpm: parseInt(document.getElementById('config-global-tpm').value)
+            },
+            health_monitor: {
+                enabled: document.getElementById('config-health-enabled').checked,
+                interval: parseInt(document.getElementById('config-health-interval').value)
+            }
+        };
+        
+        await API.post('/api/risk-control/config', config);
+        alert('配置已保存，需要重启服务才能生效');
+    } catch (err) {
+        alert('保存失败：' + (err.message || '未知错误'));
+    }
 }
 
 // Init
