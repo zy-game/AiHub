@@ -110,7 +110,8 @@ async def api_list_all_accounts(request: web.Request) -> web.Response:
             "output_tokens": row.get("output_tokens") or 0,
             "total_tokens": row.get("total_tokens") or 0,
             "last_used_at": row.get("last_used_at"),
-            "enabled": row.get("enabled", 1)
+            "enabled": row.get("enabled", 1),
+            "created_by": row.get("created_by")
         })
     return web.json_response(result)
 
@@ -677,11 +678,11 @@ async def api_model_pricing(request: web.Request) -> web.Response:
 
 
 async def api_health_check_channel(request: web.Request) -> web.Response:
-    """Health check a specific channel"""
+    """Health check a specific channel/provider"""
     from utils.health_checker import health_checker
     
-    channel_id = int(request.match_info["id"])
-    result = await health_checker.check_single_channel(channel_id)
+    provider_type = request.match_info["id"]  # Now it's a string like "kiro", "claude", etc.
+    result = await health_checker.check_single_provider(provider_type)
     
     return web.json_response(result)
 

@@ -49,6 +49,14 @@ let currentChannelId = null;
 let currentChannelName = '';
 let currentChannelType = 'openai';
 
+// Helper function to escape HTML
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Formatters
 function formatTokens(n) {
     if (!n) return '-';
@@ -101,6 +109,7 @@ document.querySelectorAll('.nav-menu a').forEach(link => {
 });
 
 function showPage(page) {
+    console.log('showPage called with:', page);
     document.querySelectorAll('.nav-menu a').forEach(l => l.classList.remove('active'));
     const navLink = document.querySelector(`.nav-menu a[data-page="${page}"]`);
     if (navLink) {
@@ -108,8 +117,12 @@ function showPage(page) {
     }
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     const pageElement = document.getElementById(`page-${page}`);
+    console.log('Page element found:', pageElement);
     if (pageElement) {
         pageElement.classList.add('active');
+        console.log('Page activated:', page);
+    } else {
+        console.error('Page element not found:', `page-${page}`);
     }
 }
 
@@ -122,7 +135,6 @@ function loadPageData(page) {
         tokens: loadTokens, 
         logs: loadLogs,
         profile: loadProfile,
-        'risk-overview': loadRiskOverview,
         'risk-proxy-pool': loadRiskProxyPool,
         'risk-health-monitor': loadRiskHealthMonitor,
         'risk-rate-limit': loadRiskRateLimit,
@@ -142,6 +154,15 @@ async function loadDashboard() {
     document.getElementById('stat-tokens').textContent = formatTokens((o.total_input_tokens||0) + (o.total_output_tokens||0));
     document.getElementById('stat-duration').textContent = o.avg_duration ? `${Math.round(o.avg_duration)}ms` : '-';
     document.getElementById('stat-errors').textContent = o.total_requests ? `${((o.error_count||0)/o.total_requests*100).toFixed(1)}%` : '0%';
+    
+    // Load risk control status for super_admin
+    if (window.userRole === 'super_admin') {
+        const riskSection = document.getElementById('risk-control-status');
+        if (riskSection) {
+            riskSection.style.display = 'block';
+            await loadRiskControlStatus();
+        }
+    }
     
     // Channel stats - only load if section is visible (super_admin only)
     const channelTbody = document.querySelector('#channel-stats tbody');
@@ -249,8 +270,11 @@ function renderTokensChart(hourlyData) {
 
 // Channels (Card)
 async function loadChannels() {
+    console.log('=== loadChannels v2.0 - Fixed nested template strings ===');
     const channels = await API.get('/api/providers');
+    console.log('Channels data:', channels);
     document.getElementById('channels-grid').innerHTML = channels.map(c => {
+        console.log('Processing channel:', c.id, c.name, 'Type of id:', typeof c.id);
         const successRate = c.total_requests > 0 ? ((1 - (c.failed_requests || 0) / c.total_requests) * 100).toFixed(1) : '100.0';
         
         // Health status indicator
@@ -308,14 +332,56 @@ async function loadChannels() {
                 ${c.type === 'kiro' && c.limit ? getProgressBar(c.usage||0, c.limit) : ''}
             </div>
             <div class="item-card-footer">
-                ${c.supports_usage_refresh?`<button class="btn btn-xs" onclick="refreshChannelUsage(${c.id})">刷新</button>`:''}
-                <button class="btn btn-xs" id="health-check-btn-${c.id}" onclick="healthCheckChannel(${c.id})">健康检查</button>
-                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs" onclick="editChannel(${c.id})">编辑</button>` : ''}
-                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs btn-danger" onclick="deleteChannel(${c.id})">删除</button>` : ''}
+                ${c.supports_usage_refresh ? '<button class="btn btn-xs" data-action="refresh-usage" data-channel-id="' + c.id + '">刷新</button>' : ''}
+                <button class="btn btn-xs" id="health-check-btn-${c.id}" data-action="health-check" data-channel-id="${c.id}">健康检查</button>
+                ${window.userRole === 'super_admin' ? '<button class="btn btn-xs" data-action="edit-channel" data-channel-id="' + c.id + '">编辑</button>' : ''}
             </div>
         </div>
     `;
     }).join('');
+    
+    // Add event delegation for channel card buttons
+    setupChannelCardEvents();
+}
+
+function setupChannelCardEvents() {
+    const grid = document.getElementById('channels-grid');
+    if (!grid) return;
+    
+    // Remove old listener if exists
+    grid.removeEventListener('click', handleChannelCardClick);
+    // Add new listener
+    grid.addEventListener('click', handleChannelCardClick);
+}
+
+function handleChannelCardClick(e) {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    
+    const action = btn.dataset.action;
+    console.log('Button element:', btn);
+    console.log('Button dataset:', btn.dataset);
+    console.log('data-channel-id attribute:', btn.getAttribute('data-channel-id'));
+    const channelId = btn.dataset.channelId; // Don't parse as int, keep as string
+    
+    console.log('Button clicked:', action, 'Channel ID:', channelId, 'Type:', typeof channelId);
+    
+    switch(action) {
+        case 'refresh-usage':
+            refreshChannelUsage(channelId);
+            break;
+        case 'health-check':
+            healthCheckChannel(channelId);
+            break;
+        case 'edit-channel':
+            console.log('Calling editChannel with id:', channelId);
+            editChannel(channelId);
+            break;
+        case 'show-accounts':
+            const channelName = btn.dataset.channelName;
+            showChannelAccountsPage(channelId, channelName);
+            break;
+    }
 }
 
 async function healthCheckChannel(id) {
@@ -394,8 +460,11 @@ function showChannelModal(c = null) {
 }
 
 async function editChannel(id) {
+    console.log('editChannel called with id:', id, 'Type:', typeof id);
     const channels = await API.get('/api/providers');
-    const c = channels.find(x => x.id === id);
+    console.log('Channels loaded:', channels);
+    const c = channels.find(x => x.id === id); // Compare as string
+    console.log('Found channel:', c);
     if (c) {
         // Navigate to edit page
         document.getElementById('channel-edit-title').textContent = `编辑渠道 - ${c.name}`;
@@ -406,36 +475,70 @@ async function editChannel(id) {
         document.getElementById('edit-channel-weight').value = c.weight || 1;
         document.getElementById('edit-channel-enabled').checked = c.enabled;
         
-        // Load supported models
-        loadChannelSupportedModels(c.id);
+        // Load model selection
+        await loadChannelModels(c.id);
         
+        console.log('Showing channel-edit page');
         showPage('channel-edit');
+    } else {
+        console.error('Channel not found with id:', id);
     }
 }
 
-async function loadChannelSupportedModels(channelId) {
-    const container = document.getElementById('edit-channel-supported-models');
+async function loadChannelModels(channelId) {
+    const container = document.getElementById('edit-channel-models-container');
     try {
-        const data = await API.get(`/api/channels/${channelId}/models`);
-        if (data.supported_models && data.supported_models.length > 0) {
-            container.innerHTML = `<div class="model-tags">${data.supported_models.map(m => `<span class="model-tag">${m}</span>`).join('')}</div>`;
-        } else {
-            container.innerHTML = '<small class="help-text">无可用模型</small>';
+        const data = await API.get(`/api/channels/${channelId}`);
+        const allModels = data.all_models || [];
+        const enabledModels = data.enabled_models || [];
+        
+        if (allModels.length === 0) {
+            container.innerHTML = '<small class="help-text">此渠道没有可用模型</small>';
+            return;
         }
+        
+        // Create checkboxes for each model
+        container.innerHTML = allModels.map(model => {
+            const isChecked = enabledModels.length === 0 || enabledModels.includes(model);
+            return `
+                <div class="model-checkbox-item${isChecked ? ' selected' : ''}" onclick="toggleModelCheckbox(this)">
+                    <input type="checkbox" id="model-${channelId}-${model}" 
+                           value="${model}" ${isChecked ? 'checked' : ''}>
+                    <label for="model-${channelId}-${model}">${model}</label>
+                </div>
+            `;
+        }).join('');
     } catch (err) {
+        console.error('Failed to load models:', err);
         container.innerHTML = '<small class="help-text text-error">加载失败</small>';
     }
+}
+
+function toggleModelCheckbox(item) {
+    const checkbox = item.querySelector('input[type="checkbox"]');
+    checkbox.checked = !checkbox.checked;
+    item.classList.toggle('selected', checkbox.checked);
 }
 
 async function saveChannelEdit() {
     const id = document.getElementById('edit-channel-id').value;
     
+    // Get selected models
+    const container = document.getElementById('edit-channel-models-container');
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    const enabledModels = Array.from(checkboxes)
+        .filter(cb => cb.checked)
+        .map(cb => cb.value);
+    
     const data = {
         name: document.getElementById('edit-channel-name').value,
         priority: parseInt(document.getElementById('edit-channel-priority').value) || 0,
         weight: parseInt(document.getElementById('edit-channel-weight').value) || 1,
-        enabled: document.getElementById('edit-channel-enabled').checked ? 1 : 0
+        enabled: document.getElementById('edit-channel-enabled').checked ? 1 : 0,
+        enabled_models: enabledModels
     };
+    
+    console.log('Saving channel config:', data);
     
     try {
         await API.put(`/api/channels/${id}`, data);
@@ -445,10 +548,6 @@ async function saveChannelEdit() {
     } catch (err) {
         alert('保存失败：' + err.message);
     }
-}
-
-async function deleteChannel(id) {
-    if (confirm('确认删除此渠道及其所有账号？')) { await API.delete(`/api/channels/${id}`); loadChannels(); }
 }
 
 document.getElementById('channel-form').addEventListener('submit', async e => {
@@ -629,7 +728,13 @@ document.getElementById('account-form').addEventListener('submit', async e => {
 // All Accounts (Card)
 async function loadAccountsAll() {
     const accounts = await API.get('/api/accounts');
-    document.getElementById('accounts-all-grid').innerHTML = accounts.map(a => `
+    const currentUserId = currentUser?.id;
+    
+    document.getElementById('accounts-all-grid').innerHTML = accounts.map(a => {
+        // Show delete button if: super_admin OR account was created by current user
+        const canDelete = window.userRole === 'super_admin' || (a.created_by && a.created_by === currentUserId);
+        
+        return `
         <div class="item-card">
             <div class="item-card-header">
                 <div>
@@ -652,10 +757,11 @@ async function loadAccountsAll() {
             <div class="item-card-footer">
                 ${a.channel_type==='kiro'?`<button class="btn btn-xs" onclick="refreshAccountUsageAll(${a.id})">刷新</button>`:''}
                 ${window.userRole === 'super_admin' ? `<button class="btn btn-xs" onclick="toggleAccountAll(${a.id},${a.enabled})">${a.enabled?'禁用':'启用'}</button>` : ''}
-                ${window.userRole === 'super_admin' ? `<button class="btn btn-xs btn-danger" onclick="deleteAccountAll(${a.id})">删除</button>` : ''}
+                ${canDelete ? `<button class="btn btn-xs btn-danger" onclick="deleteAccountAll(${a.id})">删除</button>` : ''}
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 async function refreshAccountUsageAll(id) {
@@ -1230,7 +1336,7 @@ function applyPermissions(user) {
     
     // Show risk control menus for super_admin
     if (role === 'super_admin') {
-        const riskMenus = ['risk-overview-menu', 'risk-proxy-menu', 'risk-health-menu', 'risk-rate-menu', 'risk-config-menu'];
+        const riskMenus = ['risk-proxy-menu', 'risk-health-menu', 'risk-rate-menu', 'risk-config-menu'];
         riskMenus.forEach(menuId => {
             const menu = document.getElementById(menuId);
             if (menu) {
@@ -1318,34 +1424,32 @@ async function changePassword() {
     }
 }
 
-// Helper function to escape HTML
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
 // ==================== Risk Control Functions ====================
 
-async function loadRiskOverview() {
+async function loadRiskControlStatus() {
     try {
-        const data = await API.get('/api/risk-control/overview');
-        document.getElementById('overview-proxy-status').textContent = data.proxy_pool?.enabled ? '已启用' : '未启用';
-        document.getElementById('overview-health-status').textContent = data.health_monitor?.enabled ? '已启用' : '未启用';
-        document.getElementById('overview-rate-status').textContent = data.rate_limit?.enabled ? '已启用' : '未启用';
-        document.getElementById('overview-fingerprint-status').textContent = data.fingerprint?.enabled ? '已启用' : '未启用';
+        const data = await API.get('/api/risk-control/status');
+        document.getElementById('dashboard-proxy-status').textContent = data.proxy_pool?.enabled ? '✅ 已启用' : '❌ 未启用';
+        document.getElementById('dashboard-rate-status').textContent = data.rate_limit?.enabled ? '✅ 已启用' : '❌ 未启用';
+        document.getElementById('dashboard-health-status').textContent = data.health_monitor?.enabled ? '✅ 已启用' : '❌ 未启用';
+        document.getElementById('dashboard-fingerprint-status').textContent = data.fingerprint?.enabled ? '✅ 已启用' : '❌ 未启用';
     } catch (err) {
-        console.error('Failed to load risk overview:', err);
+        console.error('Failed to load risk control status:', err);
     }
 }
 
+async function loadRiskOverview() {
+    // Removed - integrated into dashboard
+}
+
 async function refreshOverview() {
-    await loadRiskOverview();
+    // Removed - integrated into dashboard
+    await loadRiskControlStatus();
 }
 
 async function loadRiskProxyPool() {
     try {
-        const data = await API.get('/api/risk-control/proxy-pool');
+        const data = await API.get('/api/risk-control/proxy-pool/stats');
         document.getElementById('proxy-total').textContent = data.total || 0;
         document.getElementById('proxy-alive').textContent = data.alive || 0;
         document.getElementById('proxy-dead').textContent = data.dead || 0;
@@ -1399,7 +1503,7 @@ async function deleteProxy(id) {
 
 async function loadRiskHealthMonitor() {
     try {
-        const data = await API.get('/api/risk-control/health-monitor');
+        const data = await API.get('/api/risk-control/health-monitor/stats');
         document.getElementById('health-total').textContent = data.total || 0;
         document.getElementById('health-healthy').textContent = data.healthy || 0;
         document.getElementById('health-degraded').textContent = data.degraded || 0;
@@ -1430,7 +1534,7 @@ async function refreshHealthMonitor() {
 async function resetAccountHealth(accountId) {
     if (!confirm('确定要重置此账号的健康状态吗？')) return;
     try {
-        await API.post(`/api/risk-control/health-monitor/${accountId}/reset`);
+        await API.post(`/api/risk-control/accounts/${accountId}/recover`);
         await loadRiskHealthMonitor();
     } catch (err) {
         alert('重置失败：' + (err.message || '未知错误'));
@@ -1439,7 +1543,7 @@ async function resetAccountHealth(accountId) {
 
 async function loadRiskRateLimit() {
     try {
-        const data = await API.get('/api/risk-control/rate-limit');
+        const data = await API.get('/api/risk-control/rate-limit/stats');
         document.getElementById('global-requests').textContent = data.global?.requests || 0;
         document.getElementById('global-tokens').textContent = formatTokens(data.global?.tokens || 0);
         document.getElementById('global-rpm-limit').textContent = data.global?.rpm_limit || '-';
@@ -1455,7 +1559,7 @@ async function refreshRateLimit() {
 
 async function loadRiskConfig() {
     try {
-        const data = await API.get('/api/risk-control/config');
+        const data = await API.get('/api/risk-control/status');
         document.getElementById('config-proxy-enabled').checked = data.proxy_pool?.enabled || false;
         document.getElementById('config-proxy-strategy').value = data.proxy_pool?.strategy || 'sticky';
         document.getElementById('config-rate-enabled').checked = data.rate_limit?.enabled || false;
@@ -1486,8 +1590,8 @@ async function saveRiskConfig() {
             }
         };
         
-        await API.post('/api/risk-control/config', config);
-        alert('配置已保存，需要重启服务才能生效');
+        const result = await API.post('/api/risk-control/config', config);
+        alert(result.message || '配置已保存，需要重启服务才能生效');
     } catch (err) {
         alert('保存失败：' + (err.message || '未知错误'));
     }

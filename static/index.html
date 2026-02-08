@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Gateway</title>
+    <title>AI Gateway</title>
+    <link rel="icon" type="image/jpeg" href="/static/assets/icon.jpg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -22,7 +23,6 @@
             <li><a href="#" data-page="tokens">🔑 令牌</a></li>
             <li><a href="#" data-page="logs">📝 日志</a></li>
             <li><a href="#" data-page="profile">⚙️ 个人中心</a></li>
-            <li id="risk-overview-menu" style="display:none;"><a href="#" data-page="risk-overview">🛡️ 系统概览</a></li>
             <li id="risk-proxy-menu" style="display:none;"><a href="#" data-page="risk-proxy-pool">🌐 代理池管理</a></li>
             <li id="risk-health-menu" style="display:none;"><a href="#" data-page="risk-health-monitor">💊 账号健康</a></li>
             <li id="risk-rate-menu" style="display:none;"><a href="#" data-page="risk-rate-limit">⏱️ 速率限制</a></li>
@@ -52,6 +52,30 @@
         <!-- Dashboard -->
         <section id="page-dashboard" class="page active">
             <div class="page-header"><h1>仪表盘</h1></div>
+            
+            <!-- Risk Control Status (super_admin only) -->
+            <div id="risk-control-status" style="display:none; margin-bottom: 24px;">
+                <h2>🛡️ 风控系统状态</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>代理池</h3>
+                        <p id="dashboard-proxy-status">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>速率限制</h3>
+                        <p id="dashboard-rate-status">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>账号健康</h3>
+                        <p id="dashboard-health-status">-</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>指纹伪装</h3>
+                        <p id="dashboard-fingerprint-status">-</p>
+                    </div>
+                </div>
+            </div>
+            
             <div class="stats-grid">
                 <div class="stat-card"><h3>总请求数</h3><p id="stat-requests">-</p></div>
                 <div class="stat-card"><h3>总Token数</h3><p id="stat-tokens">-</p></div>
@@ -273,11 +297,11 @@
                         <small class="help-text">类型创建后不可修改</small>
                     </div>
                     <div class="form-group">
-                        <label>支持的模型</label>
-                        <div id="edit-channel-supported-models" class="supported-models-list">
+                        <label>启用的模型</label>
+                        <div id="edit-channel-models-container" class="models-checkbox-container">
                             <small class="help-text">加载中...</small>
                         </div>
-                        <small class="help-text">模型由Provider自动管理，无需手动配置</small>
+                        <small class="help-text">勾选要启用的模型，不勾选则禁用该模型</small>
                     </div>
                     <div class="form-group">
                         <label>优先级</label>
@@ -330,30 +354,6 @@
         </section>
         
         <!-- Risk Control: System Overview -->
-        <section id="page-risk-overview" class="page">
-            <div class="page-header">
-                <h1>🛡️ 风控系统概览</h1>
-                <button class="btn btn-primary" onclick="refreshOverview()">刷新</button>
-            </div>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <h3>代理池</h3>
-                    <p id="overview-proxy-status">-</p>
-                </div>
-                <div class="stat-card">
-                    <h3>账号健康</h3>
-                    <p id="overview-health-status">-</p>
-                </div>
-                <div class="stat-card">
-                    <h3>速率限制</h3>
-                    <p id="overview-rate-status">-</p>
-                </div>
-                <div class="stat-card">
-                    <h3>指纹伪装</h3>
-                    <p id="overview-fingerprint-status">-</p>
-                </div>
-            </div>
-        </section>
         
         <!-- Risk Control: Proxy Pool -->
         <section id="page-risk-proxy-pool" class="page">
@@ -736,6 +736,6 @@
     </div>
     
     <script src="/static/js/chart.min.js"></script>
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=3.0"></script>
 </body>
 </html>

@@ -17,12 +17,13 @@ class BaseProvider(ABC):
         self.priority = self.DEFAULT_PRIORITY
         self.weight = self.DEFAULT_WEIGHT
         self.enabled = self.DEFAULT_ENABLED
+        self.enabled_models = []  # Empty means all models are enabled
         # Statistics (runtime only, not persisted)
         self.avg_response_time = 0
         self.total_requests = 0
         self.failed_requests = 0
     
-    def configure(self, priority=None, weight=None, enabled=None):
+    def configure(self, priority=None, weight=None, enabled=None, enabled_models=None):
         """Configure provider settings from config file or database"""
         if priority is not None:
             self.priority = priority
@@ -30,6 +31,12 @@ class BaseProvider(ABC):
             self.weight = weight
         if enabled is not None:
             self.enabled = enabled
+        if enabled_models is not None:
+            # Parse comma-separated string to list
+            if isinstance(enabled_models, str):
+                self.enabled_models = [m.strip() for m in enabled_models.split(',') if m.strip()]
+            else:
+                self.enabled_models = enabled_models if enabled_models else []
     
     def get_success_rate(self) -> float:
         """Get success rate (0-1)"""
@@ -206,9 +213,22 @@ class BaseProvider(ABC):
         """Get statically defined supported models (no API call needed)"""
         return []
     
+    def get_all_models(self) -> list:
+        """Get all available models (before filtering by enabled_models)"""
+        return self.get_supported_models()
+    
+    def get_enabled_models(self) -> list:
+        """Get only enabled models"""
+        all_models = self.get_all_models()
+        if not self.enabled_models:  # Empty list means all models are enabled
+            return all_models
+        return [m for m in all_models if m in self.enabled_models]
+    
     def supports_model(self, model: str) -> bool:
         """Check if this provider supports the given model"""
-        return model in self.get_supported_models()
+        # Check against enabled models only
+        enabled = self.get_enabled_models()
+        return model in enabled
     
     def get_mapped_model(self, model: str) -> str:
         """Get the actual model name to use (for internal mapping)"""

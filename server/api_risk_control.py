@@ -5,15 +5,40 @@ from aiohttp import web
 from utils.logger import logger
 from utils.risk_control import get_risk_control_system
 from utils.proxy_manager import get_proxy_pool, ProxyConfig, ProxyProtocol
-from utils.rate_limiter import get_rate_limiter
-from utils.health_monitor import get_health_monitor
+from utils.rate_limiter import get_rate_limiter, init_rate_limiter, RateLimitConfig
+from utils.health_monitor import get_health_monitor, init_health_monitor
+from models.risk_control_config import get_risk_control_config, update_risk_control_config
 
 
 async def api_risk_control_status(request: web.Request):
     """获取风控系统状态"""
     try:
+        # Get config from database
+        config = await get_risk_control_config()
+        
+        # Get actual system status
         system = get_risk_control_system()
-        status = system.get_status()
+        status = {
+            "proxy_pool": {
+                "enabled": config.get("proxy_pool", {}).get("enabled", False),
+                "strategy": config.get("proxy_pool", {}).get("strategy", "sticky"),
+                "initialized": get_proxy_pool() is not None
+            },
+            "rate_limit": {
+                "enabled": config.get("rate_limit", {}).get("enabled", False),
+                "global_rpm": config.get("rate_limit", {}).get("global", {}).get("requests_per_minute", 1000),
+                "global_tpm": config.get("rate_limit", {}).get("global", {}).get("tokens_per_minute", 1000000),
+                "initialized": get_rate_limiter() is not None
+            },
+            "health_monitor": {
+                "enabled": config.get("health_monitor", {}).get("enabled", False),
+                "interval": config.get("health_monitor", {}).get("check_interval", 60),
+                "initialized": get_health_monitor() is not None
+            },
+            "fingerprint": {
+                "enabled": config.get("fingerprint", {}).get("enabled", False)
+            }
+        }
         return web.json_response(status)
     except Exception as e:
         logger.error(f"Failed to get risk control status: {e}")
@@ -233,4 +258,106 @@ async def api_account_recover(request: web.Request):
         })
     except Exception as e:
         logger.error(f"Failed to recover account: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_update_risk_control_config(request: web.Request):
+    """更新风控系统配置并动态应用"""
+    try:
+        data = await request.json()
+        
+        # Save to database
+        success = await update_risk_control_config(data)
+        if not success:
+            return web.json_response({"error": "Failed to save config"}, status=500)
+        
+        # Apply changes dynamically
+        changes_applied = []
+        
+        # 1. Update proxy pool
+        if "proxy_pool" in data:
+            proxy_config = data["proxy_pool"]
+            enabled = proxy_config.get("enabled", False)
+            strategy = proxy_config.get("strategy", "sticky")
+            
+            pool = get_proxy_pool()
+            if pool is None and enabled:
+                # Initialize if not exists
+                from utils.proxy_manager import ProxyBindingStrategy
+                strategy_enum = ProxyBindingStrategy[strategy.upper()]
+                from utils.proxy_manager import init_proxy_pool
+                init_proxy_pool(strategy_enum)
+                pool = get_proxy_pool()
+            
+            if pool:
+                pool.set_enabled(enabled)
+                # Update strategy
+                from utils.proxy_manager import ProxyBindingStrategy
+                strategy_enum = ProxyBindingStrategy[strategy.upper()]
+                pool.set_strategy(strategy_enum)
+                changes_applied.append(f"代理池已{'启用' if enabled else '禁用'}，策略：{strategy}")
+                logger.info(f"Proxy pool {'enabled' if enabled else 'disabled'}, strategy: {strategy}")
+            else:
+                changes_applied.append("代理池初始化失败")
+        
+        # 2. Update rate limiter
+        if "rate_limit" in data:
+            rate_config = data["rate_limit"]
+            enabled = rate_config.get("enabled", False)
+            
+            if enabled:
+                # Initialize or update rate limiter
+                global_rpm = rate_config.get("global_rpm", 1000)
+                global_tpm = rate_config.get("global_tpm", 1000000)
+                
+                global_limit = RateLimitConfig(
+                    requests_per_minute=global_rpm,
+                    tokens_per_minute=global_tpm,
+                    burst_size=50,
+                    min_interval=0.1
+                )
+                init_rate_limiter(global_limit)
+                changes_applied.append("速率限制已启用")
+                logger.info(f"Rate limiter enabled with RPM={global_rpm}, TPM={global_tpm}")
+            else:
+                # Disable rate limiter by setting very high limits
+                global_limit = RateLimitConfig(
+                    requests_per_minute=999999,
+                    tokens_per_minute=999999999,
+                    burst_size=999999,
+                    min_interval=0.0
+                )
+                init_rate_limiter(global_limit)
+                changes_applied.append("速率限制已禁用")
+                logger.info("Rate limiter disabled")
+        
+        # 3. Update health monitor
+        if "health_monitor" in data:
+            health_config = data["health_monitor"]
+            enabled = health_config.get("enabled", False)
+            
+            monitor = get_health_monitor()
+            if monitor is None and enabled:
+                # Initialize if not exists
+                init_health_monitor()
+                monitor = get_health_monitor()
+            
+            if monitor:
+                monitor.set_enabled(enabled)
+                changes_applied.append(f"健康监控已{'启用' if enabled else '禁用'}")
+                logger.info(f"Health monitor {'enabled' if enabled else 'disabled'}")
+            else:
+                changes_applied.append("健康监控初始化失败")
+        
+        message = "配置已保存并应用：" + "、".join(changes_applied) if changes_applied else "配置已保存"
+        
+        logger.info(f"Risk control config updated and applied: {data}")
+        
+        return web.json_response({
+            "success": True,
+            "message": message,
+            "changes_applied": changes_applied
+        })
+    except Exception as e:
+        logger.error(f"Failed to update risk control config: {e}")
         return web.json_response({"error": str(e)}, status=500)

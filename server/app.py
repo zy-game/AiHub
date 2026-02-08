@@ -27,12 +27,13 @@ from server.api import (
     api_list_tokens, api_create_token, api_update_token, api_delete_token, api_token_stats, api_model_pricing,
     api_list_logs, api_get_stats,
     api_refresh_account_usage,
-    api_health_check_all
+    api_health_check_all, api_health_check_channel
 )
 from server.api_risk_control import (
     api_risk_control_status, api_proxy_pool_stats, api_add_proxy, api_proxy_health_check,
     api_rate_limit_stats, api_health_monitor_stats, api_account_health_detail,
-    api_account_manual_degrade, api_account_manual_ban, api_account_recover
+    api_account_manual_degrade, api_account_manual_ban, api_account_recover,
+    api_update_risk_control_config
 )
 from server.tasks import start_background_tasks
 from utils.logger import logger
@@ -43,6 +44,11 @@ async def on_startup(app: web.Application):
     logger.info("Database connected")
     await init_auth_system()  # Initialize super admin and invite code
     logger.info("Authentication system initialized")
+    
+    # Load provider configurations from database
+    from providers import load_provider_configs_from_db
+    await load_provider_configs_from_db()
+    logger.info("Provider configurations loaded")
     
     # Initialize risk control system
     from utils.risk_control import init_risk_control
@@ -111,6 +117,7 @@ def create_app() -> web.Application:
     
     # Backward compatibility - map old /api/channels to /api/providers
     app.router.add_get("/api/channels", api_list_providers)  # Same as providers
+    app.router.add_get("/api/channels/{type}", api_get_provider)  # Get single channel/provider
     app.router.add_get("/api/channels/{type}/models", api_provider_models)
     app.router.add_get("/api/channels/{type}/accounts", api_list_provider_accounts)
     app.router.add_post("/api/channels/{type}/accounts", api_create_provider_account)
@@ -154,6 +161,7 @@ def create_app() -> web.Application:
     
     # Health check routes
     app.router.add_post("/api/health-check-all", api_health_check_all)
+    app.router.add_post("/api/channels/{id}/health-check", api_health_check_channel)
     
     # Risk Control API routes (NEW)
     app.router.add_get("/api/risk-control/status", api_risk_control_status)
@@ -166,15 +174,21 @@ def create_app() -> web.Application:
     app.router.add_post("/api/risk-control/accounts/{id}/degrade", api_account_manual_degrade)
     app.router.add_post("/api/risk-control/accounts/{id}/ban", api_account_manual_ban)
     app.router.add_post("/api/risk-control/accounts/{id}/recover", api_account_recover)
+    app.router.add_post("/api/risk-control/config", api_update_risk_control_config)
     
     # Static files path (must be defined before use)
-    static_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+    # __file__ is server/app.py, so we need to go up two levels to get to project root
+    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    static_path = os.path.join(base_path, "static")
+    
+    logger.info(f"Base path: {base_path}")
+    logger.info(f"Static path: {static_path}")
     
     # Risk Control Management Page (super_admin only)
     app.router.add_get("/risk-control", lambda r: web.FileResponse(os.path.join(static_path, "risk-control.html")))
     
-    # Static files
-    app.router.add_static("/static", static_path)
+    # Static files (must be registered before catch-all routes)
+    app.router.add_static("/static", static_path, show_index=False, follow_symlinks=True)
     app.router.add_get("/", lambda r: web.FileResponse(os.path.join(static_path, "index.html")))
     
     return app

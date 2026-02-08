@@ -72,6 +72,8 @@ async def api_get_provider(request: web.Request) -> web.Response:
         "weight": provider.weight,
         "enabled": provider.enabled,
         "supported_models": provider.get_supported_models(),
+        "all_models": provider.get_all_models(),
+        "enabled_models": provider.enabled_models,
         "supports_usage_refresh": provider.supports_usage_refresh(),
         "account_count": len(accounts),
         "enabled_account_count": sum(1 for a in accounts if a.enabled),
@@ -85,7 +87,7 @@ async def api_get_provider(request: web.Request) -> web.Response:
     })
 
 async def api_update_provider_config(request: web.Request) -> web.Response:
-    """Update provider configuration (priority, weight, enabled)"""
+    """Update provider configuration (priority, weight, enabled, enabled_models)"""
     provider_type = request.match_info["type"]
     data = await request.json()
     
@@ -93,10 +95,27 @@ async def api_update_provider_config(request: web.Request) -> web.Response:
     if not provider:
         return web.json_response({"error": "Provider not found"}, status=404)
     
-    # Update configuration
+    # Update configuration in memory
     configure_provider(provider_type, **data)
     
-    # TODO: Optionally persist to config file
+    # Persist to database
+    from models.database import save_provider_config
+    
+    # Convert enabled_models list to comma-separated string for database
+    enabled_models_str = None
+    if 'enabled_models' in data:
+        if isinstance(data['enabled_models'], list):
+            enabled_models_str = ','.join(data['enabled_models'])
+        else:
+            enabled_models_str = data['enabled_models']
+    
+    await save_provider_config(
+        provider_type,
+        priority=data.get('priority'),
+        weight=data.get('weight'),
+        enabled=data.get('enabled'),
+        enabled_models=enabled_models_str
+    )
     
     return web.json_response({"success": True})
 
@@ -138,7 +157,8 @@ async def api_list_provider_accounts(request: web.Request) -> web.Response:
         "output_tokens": a.output_tokens or 0,
         "total_tokens": a.total_tokens or 0,
         "last_used_at": a.last_used_at,
-        "enabled": a.enabled
+        "enabled": a.enabled,
+        "created_by": a.created_by
     } for a in accounts])
 
 async def api_create_provider_account(request: web.Request) -> web.Response:
@@ -150,10 +170,14 @@ async def api_create_provider_account(request: web.Request) -> web.Response:
     if not provider:
         return web.json_response({"error": "Provider not found"}, status=404)
     
+    # Get current user ID from session
+    user_id = request.get('user_id')
+    
     id_ = await create_account(
         provider_type=provider_type,
         api_key=data["api_key"],
-        name=data.get("name", "")
+        name=data.get("name", ""),
+        created_by=user_id
     )
     return web.json_response({"id": id_, "success": True})
 
@@ -165,6 +189,9 @@ async def api_batch_import_provider_accounts(request: web.Request) -> web.Respon
     provider = get_provider(provider_type)
     if not provider:
         return web.json_response({"error": "Provider not found"}, status=404)
+    
+    # Get current user ID from session
+    user_id = request.get('user_id')
     
     accounts = []
     
@@ -207,7 +234,7 @@ async def api_batch_import_provider_accounts(request: web.Request) -> web.Respon
             # Plain text, one api_key per line
             accounts = [{"api_key": line.strip()} for line in text.split("\n") if line.strip()]
     
-    count = await batch_create_accounts(provider_type, accounts)
+    count = await batch_create_accounts(provider_type, accounts, created_by=user_id)
     return web.json_response({"imported": count, "success": True})
 
 async def api_clear_provider_accounts(request: web.Request) -> web.Response:
@@ -404,11 +431,14 @@ async def api_kiro_device_token(request: web.Request) -> web.Response:
                         "expiresAt": data.get("expiresIn")
                     }
                     
+                    # Get current user ID from session
+                    user_id = request.get('user_id')
+                    
                     # Import the account
                     count = await batch_create_accounts(provider_type, [{
                         "api_key": json.dumps(account_data),
                         "name": f"BuilderID-{str(uuid.uuid4())[:8]}"
-                    }])
+                    }], created_by=user_id)
                     
                     return web.json_response({"success": True, "imported": count})
                 

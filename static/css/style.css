@@ -944,3 +944,52 @@ td a:hover {
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     color: white;
 }
+
+/* Model Checkbox Container */
+.models-checkbox-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.model-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.model-checkbox-item:hover {
+    border-color: var(--primary);
+}
+
+.model-checkbox-item input[type="checkbox"] {
+    display: none;
+}
+
+.model-checkbox-item label {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    user-select: none;
+}
+
+.model-checkbox-item.selected {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+.model-checkbox-item.selected label {
+    color: white;
+    font-weight: 500;
+}

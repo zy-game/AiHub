@@ -260,6 +260,16 @@ class HealthMonitor:
     def __init__(self):
         self.accounts: Dict[int, AccountHealth] = {}
         self._lock = asyncio.Lock()
+        self.enabled = True  # Add enabled flag
+    
+    def set_enabled(self, enabled: bool):
+        """Enable or disable health monitoring"""
+        self.enabled = enabled
+        logger.info(f"Health monitor {'enabled' if enabled else 'disabled'}")
+    
+    def is_enabled(self) -> bool:
+        """Check if health monitoring is enabled"""
+        return self.enabled
     
     async def get_account_health(self, account_id: int) -> AccountHealth:
         """获取账号健康状态"""
@@ -276,6 +286,8 @@ class HealthMonitor:
         error_type: Optional[str] = None
     ):
         """记录请求"""
+        if not self.enabled:
+            return  # Skip recording if disabled
         health = await self.get_account_health(account_id)
         await health.record_request(success, response_time, error_type)
     

@@ -205,6 +205,82 @@ class HealthChecker:
                 results["unhealthy_accounts"] += 1
         
         return results
+    
+    async def check_single_provider(self, provider_type: str) -> dict:
+        """
+        Check a single provider and return results
+        
+        Args:
+            provider_type: Provider type string (e.g., "kiro", "openai", "claude")
+        
+        Returns:
+            {
+                "provider_type": str,
+                "provider_name": str,
+                "total_accounts": int,
+                "healthy_accounts": int,
+                "unhealthy_accounts": int,
+                "accounts": [
+                    {"id": int, "name": str, "healthy": bool, "error": str}
+                ]
+            }
+        """
+        from models import get_accounts_by_provider
+        from providers import get_provider
+        
+        provider = get_provider(provider_type)
+        if not provider:
+            return {"error": "Provider not found"}
+        
+        accounts = await get_accounts_by_provider(provider_type)
+        
+        results = {
+            "provider_type": provider_type,
+            "provider_name": provider.name,
+            "total_accounts": len(accounts),
+            "healthy_accounts": 0,
+            "unhealthy_accounts": 0,
+            "accounts": []
+        }
+        
+        for account in accounts:
+            if not account.enabled:
+                results["accounts"].append({
+                    "id": account.id,
+                    "name": account.name or f"Account #{account.id}",
+                    "healthy": False,
+                    "error": "Account disabled"
+                })
+                results["unhealthy_accounts"] += 1
+                continue
+            
+            # Simple health check: try to validate the account
+            is_healthy = True
+            error_msg = None
+            
+            try:
+                # For now, just check if account has valid API key
+                if not account.api_key or len(account.api_key.strip()) == 0:
+                    is_healthy = False
+                    error_msg = "Invalid API key"
+                # Could add more checks here, like actual API calls
+            except Exception as e:
+                is_healthy = False
+                error_msg = str(e)
+            
+            results["accounts"].append({
+                "id": account.id,
+                "name": account.name or f"Account #{account.id}",
+                "healthy": is_healthy,
+                "error": error_msg
+            })
+            
+            if is_healthy:
+                results["healthy_accounts"] += 1
+            else:
+                results["unhealthy_accounts"] += 1
+        
+        return results
 
 
 # Global health checker instance

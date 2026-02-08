@@ -3,7 +3,6 @@
     "enabled": true,
     "description": "完整的风控防护系统配置"
   },
-  
   "proxy_pool": {
     "enabled": false,
     "strategy": "sticky",
@@ -32,7 +31,6 @@
       }
     ]
   },
-  
   "rate_limit": {
     "enabled": true,
     "global": {
@@ -52,17 +50,17 @@
       "tokens_per_minute": 150000,
       "burst_size": 20,
       "min_interval": 0.3
-    }
+    },
+    "global_rpm": 1000,
+    "global_tpm": 1000000
   },
-  
   "fingerprint": {
     "enabled": true,
     "sticky_fingerprint": true,
     "auto_rotate_interval": 0
   },
-  
   "health_monitor": {
-    "enabled": true,
+    "enabled": false,
     "auto_recovery": true,
     "check_interval": 60,
     "thresholds": {
@@ -75,6 +73,7 @@
     "penalties": {
       "degrade_duration": 3600,
       "ban_duration": 86400
-    }
+    },
+    "interval": 60
   }
 }

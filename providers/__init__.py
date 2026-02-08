@@ -57,5 +57,15 @@ def configure_provider(provider_type: str, **config):
         return True
     return False
 
+async def load_provider_configs_from_db():
+    """Load all provider configurations from database"""
+    from models.database import load_all_provider_configs
+    configs = await load_all_provider_configs()
+    
+    for provider_type, config in configs.items():
+        configure_provider(provider_type, **config)
+    
+    print(f"Loaded configurations for {len(configs)} providers from database")
+
 # Auto-initialize on import
 initialize_providers()

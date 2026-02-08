@@ -137,6 +137,21 @@ class ProxyPool:
         self.account_proxy_map: Dict[int, Proxy] = {}  # 账号ID -> 代理映射
         self.round_robin_index = 0
         self._lock = asyncio.Lock()
+        self.enabled = True  # Add enabled flag
+    
+    def set_enabled(self, enabled: bool):
+        """Enable or disable proxy pool"""
+        self.enabled = enabled
+        logger.info(f"Proxy pool {'enabled' if enabled else 'disabled'}")
+    
+    def is_enabled(self) -> bool:
+        """Check if proxy pool is enabled"""
+        return self.enabled
+    
+    def set_strategy(self, strategy: ProxyBindingStrategy):
+        """Change proxy binding strategy"""
+        self.strategy = strategy
+        logger.info(f"Proxy pool strategy changed to {strategy.value}")
     
     def add_proxy(self, config: ProxyConfig) -> Proxy:
         """添加代理"""

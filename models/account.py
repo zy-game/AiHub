@@ -17,6 +17,7 @@ class Account:
         self.total_tokens = row.get("total_tokens", 0) or 0
         self.last_used_at = row.get("last_used_at")
         self.enabled = row.get("enabled", 1)
+        self.created_by = row.get("created_by")  # User ID who created this account
 
 async def get_available_account(provider_type: str) -> Optional[Account]:
     """Get an available account from provider's pool (random selection)"""
@@ -149,7 +150,7 @@ async def add_kiro_points_usage(account_id: int, delta: int, updated_at: str):
     """Deprecated: use add_account_credit_usage instead"""
     await add_account_credit_usage(account_id, delta)
 
-async def create_account(provider_type: str, api_key: str, name: str = None) -> int:
+async def create_account(provider_type: str, api_key: str, name: str = None, created_by: int = None) -> int:
     """Create an account for a provider"""
     db = await get_db()
     
@@ -159,10 +160,16 @@ async def create_account(provider_type: str, api_key: str, name: str = None) -> 
         column_names = [col[1] for col in columns]
     
     if "provider_type" in column_names:
-        cursor = await db.execute(
-            "INSERT INTO accounts (provider_type, api_key, name) VALUES (?, ?, ?)",
-            (provider_type, api_key, name)
-        )
+        if "created_by" in column_names:
+            cursor = await db.execute(
+                "INSERT INTO accounts (provider_type, api_key, name, created_by) VALUES (?, ?, ?, ?)",
+                (provider_type, api_key, name, created_by)
+            )
+        else:
+            cursor = await db.execute(
+                "INSERT INTO accounts (provider_type, api_key, name) VALUES (?, ?, ?)",
+                (provider_type, api_key, name)
+            )
     else:
         # Old schema - provider_type is channel_id
         cursor = await db.execute(
@@ -172,7 +179,7 @@ async def create_account(provider_type: str, api_key: str, name: str = None) -> 
     await db.commit()
     return cursor.lastrowid
 
-async def batch_create_accounts(provider_type: str, accounts: list) -> int:
+async def batch_create_accounts(provider_type: str, accounts: list, created_by: int = None) -> int:
     """Batch import accounts: [{"api_key": "xxx", "name": "optional"}]"""
     db = await get_db()
     
@@ -188,10 +195,16 @@ async def batch_create_accounts(provider_type: str, accounts: list) -> int:
             continue
         
         if "provider_type" in column_names:
-            await db.execute(
-                "INSERT INTO accounts (provider_type, api_key, name) VALUES (?, ?, ?)",
-                (provider_type, api_key, acc.get("name", ""))
-            )
+            if "created_by" in column_names:
+                await db.execute(
+                    "INSERT INTO accounts (provider_type, api_key, name, created_by) VALUES (?, ?, ?, ?)",
+                    (provider_type, api_key, acc.get("name", ""), created_by)
+                )
+            else:
+                await db.execute(
+                    "INSERT INTO accounts (provider_type, api_key, name) VALUES (?, ?, ?)",
+                    (provider_type, api_key, acc.get("name", ""))
+                )
         else:
             await db.execute(
                 "INSERT INTO accounts (channel_id, api_key, name) VALUES (?, ?, ?)",
