@@ -1129,14 +1129,37 @@ async function loadTokens() {
 }
 
 function copyTokenKey(key, tokenId, event) {
-    navigator.clipboard.writeText(key).then(() => {
-        const btn = event.target;
-        const originalText = btn.textContent;
+    const btn = event.target;
+    const originalText = btn.textContent;
+    
+    // 使用 fallback 方法支持非 HTTPS 环境
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(key).then(() => {
+            btn.textContent = '✓';
+            setTimeout(() => btn.textContent = originalText, 2000);
+        }).catch(err => {
+            fallbackCopy(key, btn, originalText);
+        });
+    } else {
+        fallbackCopy(key, btn, originalText);
+    }
+}
+
+function fallbackCopy(text, btn, originalText) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
         btn.textContent = '✓';
         setTimeout(() => btn.textContent = originalText, 2000);
-    }).catch(err => {
-        alert('复制失败：' + err);
-    });
+    } catch (err) {
+        alert('复制失败，请手动复制');
+    }
+    document.body.removeChild(textarea);
 }
 
 async function showTokenModal() {
