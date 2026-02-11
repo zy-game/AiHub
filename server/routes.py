@@ -3,10 +3,9 @@ import time
 import asyncio
 from aiohttp import web
 from server.distributor import distribute, RequestContext
-from converters import get_converter
 from providers import get_provider, get_all_providers
 from models import create_log, update_user_quota, get_available_account, add_user_tokens, add_account_tokens, add_token_usage, get_user_by_id
-from utils.logger import logger
+from utils.logger import logger, get_provider_logger
 from utils.text import get_content_text
 from utils.token_counter import count_tokens
 from utils.model_pricing import calculate_cost
@@ -46,18 +45,11 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
                 status=403
             )
     
-    # Get converter
-    input_converter = get_converter(input_format if input_format != "openai_responses" else "openai")
-    
     if not provider:
         return web.json_response(
             {"error": {"message": f"Unknown provider type: {ctx.provider_type}"}},
             status=500
         )
-    
-    # Convert request to provider format
-    target_format = provider.get_format()
-    converted_request = input_converter.convert_request(ctx.body, target_format)
     
     # Get mapped model name from provider
     mapped_model = provider.get_mapped_model(ctx.model)
@@ -84,8 +76,6 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
                             ctx.provider = alt_provider
                             ctx.provider_type = alt_name
                             mapped_model = provider.get_mapped_model(ctx.model)
-                            target_format = provider.get_format()
-                            converted_request = input_converter.convert_request(ctx.body, target_format)
                             account = alt_account
                             logger.warning(f"Cross-group retry: switched to provider {alt_name}")
                             break
@@ -101,11 +91,11 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
                 )
             
             if ctx.provider_type == "kiro":
-                converted_request["_account_id"] = account.id
+                ctx.body["_account_id"] = account.id
 
-            return await _handle_stream(
-                request, ctx, provider, account, input_converter,
-                mapped_model, converted_request, target_format, input_format
+            return await _handle_response(
+                request, ctx, provider, account,
+                mapped_model, ctx.body
             )
             
         except Exception as e:
@@ -141,19 +131,24 @@ async def _handle_relay(request: web.Request, input_format: str) -> web.Response
                 status=502
             )
 
-async def _handle_stream(request, ctx, provider, account, input_converter,
-                          mapped_model, converted_request, target_format, input_format):
-    output_converter = get_converter(input_format if input_format != "openai_responses" else "openai")
-    
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        }
-    )
-    await response.prepare(request)
+async def _handle_response(request, ctx, provider, account, mapped_model, request_data):
+    """Handle both streaming and non-streaming responses"""
+    is_stream = request_data.get("stream", True)
+    if is_stream:
+        # Streaming response
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
+        await response.prepare(request)
+    else:
+        # Will collect complete response
+        response = None
+        complete_data = b""
     
     # Estimate input tokens from request
     input_tokens = 0
@@ -177,100 +172,125 @@ async def _handle_stream(request, ctx, provider, account, input_converter,
     
     try:
         async for chunk in provider.chat(
-            account.api_key, mapped_model,
-            converted_request
+            account.api_key, mapped_model, request_data
         ):
-            transport = request.transport
-            if transport is None or transport.is_closing():
-                break
-            if isinstance(chunk, bytes):
-                chunk_str = chunk.decode("utf-8")
-            else:
-                chunk_str = chunk
-            
-            # For Kiro provider, forward raw Claude SSE only when client expects Claude
-            if ctx.provider_type == "kiro" and input_format == "claude":
+            if is_stream:
+                # Streaming mode: write chunks directly
+                transport = request.transport
+                if transport is None or transport.is_closing():
+                    break
+                
                 try:
-                    await response.write(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
-                    total_tokens += 1
-                except Exception:
+                    chunk_bytes = chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                    await response.write(chunk_bytes)
+                    total_tokens += 1  # Rough estimate
+                except Exception as write_err:
+                    logger.error(f"Failed to write chunk: {write_err}")
                     break
             else:
-                for line in chunk_str.split("\n"):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    converted = output_converter.convert_stream_chunk(line, target_format)
-                    if converted:
-                        try:
-                            await response.write(converted.encode("utf-8"))
-                            total_tokens += 1  # Rough estimate
-                        except Exception:
-                            break
+                # Non-streaming mode: collect all data
+                complete_data += chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
         
-        # Send final done marker if needed
-        if input_format in ["openai", "openai_responses"]:
-            await response.write(b"data: [DONE]\n\n")
+        if not is_stream:
+            # Parse complete JSON to extract token count
+            try:
+                response_json = json.loads(complete_data.decode("utf-8"))
+                usage = response_json.get("usage", {})
+                total_tokens = usage.get("completion_tokens", 0)
+                if usage.get("prompt_tokens"):
+                    input_tokens = usage["prompt_tokens"]
+            except:
+                pass
+            
+            # Return complete JSON response
+            return web.Response(
+                body=complete_data,
+                status=200,
+                content_type="application/json"
+            )
     except Exception as e:
-        logger.error(f"Stream error: {e}")
+        logger.error(f"Response error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-    finally:
-        duration_ms = int((time.time() - ctx.start_time) * 1000)
         
-        # Determine user_id for logging
-        user_id = 0
-        if ctx.token:
-            user_id = ctx.token.user_id
-        elif ctx.user:
-            user_id = ctx.user.id
-        
-        await create_log(
-            user_id=user_id,
-            channel_id=0,  # No channel_id in new system
-            model=ctx.model,
-            input_tokens=input_tokens,
-            output_tokens=total_tokens,
-            duration_ms=duration_ms,
-            status=200
-        )
-        
-        # Update provider statistics
-        provider.update_stats(duration_ms, success=True)
-        
-        # Update token statistics
-        if input_tokens > 0 or total_tokens > 0:
-            # Calculate cost based on model pricing
-            cost_info = calculate_cost(ctx.model, input_tokens, total_tokens)
-            quota_usage = cost_info["quota_usage"]
-            
-            # Update token usage statistics
+        if not is_stream:
+            duration_ms = int((time.time() - ctx.start_time) * 1000)
+            user_id = 0
             if ctx.token:
-                await add_token_usage(ctx.token.id, input_tokens, total_tokens)
-                # Get token owner and update their quota and token statistics
-                token_owner = await get_user_by_id(ctx.token.user_id)
-                if token_owner:
-                    # Update user's token statistics
-                    await add_user_tokens(token_owner.id, input_tokens, total_tokens)
+                user_id = ctx.token.user_id
+            elif ctx.user:
+                user_id = ctx.user.id
+            
+            await create_log(
+                user_id=user_id,
+                channel_id=0,
+                model=ctx.model,
+                duration_ms=duration_ms,
+                status=500,
+                error=str(e)
+            )
+            provider.update_stats(duration_ms, success=False)
+            
+            return web.json_response(
+                {"error": {"message": str(e), "type": "upstream_error"}},
+                status=502
+            )
+    finally:
+        if is_stream:
+            duration_ms = int((time.time() - ctx.start_time) * 1000)
+            
+            # Determine user_id for logging
+            user_id = 0
+            if ctx.token:
+                user_id = ctx.token.user_id
+            elif ctx.user:
+                user_id = ctx.user.id
+            
+            await create_log(
+                user_id=user_id,
+                channel_id=0,  # No channel_id in new system
+                model=ctx.model,
+                input_tokens=input_tokens,
+                output_tokens=total_tokens,
+                duration_ms=duration_ms,
+                status=200
+            )
+            
+            # Update provider statistics
+            provider.update_stats(duration_ms, success=True)
+            
+            # Update token statistics
+            if input_tokens > 0 or total_tokens > 0:
+                # Calculate cost based on model pricing
+                cost_info = calculate_cost(ctx.model, input_tokens, total_tokens)
+                quota_usage = cost_info["quota_usage"]
+                
+                # Update token usage statistics
+                if ctx.token:
+                    await add_token_usage(ctx.token.id, input_tokens, total_tokens)
+                    # Get token owner and update their quota and token statistics
+                    token_owner = await get_user_by_id(ctx.token.user_id)
+                    if token_owner:
+                        # Update user's token statistics
+                        await add_user_tokens(token_owner.id, input_tokens, total_tokens)
+                        # Update user quota with calculated usage
+                        if token_owner.quota != -1:
+                            await update_user_quota(token_owner.id, quota_usage)
+                
+                # Update user tokens (legacy system - direct API key auth)
+                if ctx.user:
+                    await add_user_tokens(ctx.user.id, input_tokens, total_tokens)
                     # Update user quota with calculated usage
-                    if token_owner.quota != -1:
-                        await update_user_quota(token_owner.id, quota_usage)
+                    if ctx.user.quota != -1:
+                        await update_user_quota(ctx.user.id, quota_usage)
+                
+                # Update account tokens
+                await add_account_tokens(account.id, input_tokens, total_tokens)
             
-            # Update user tokens (legacy system - direct API key auth)
-            if ctx.user:
-                await add_user_tokens(ctx.user.id, input_tokens, total_tokens)
-                # Update user quota with calculated usage
-                if ctx.user.quota != -1:
-                    await update_user_quota(ctx.user.id, quota_usage)
-            
-            # Update account tokens
-            await add_account_tokens(account.id, input_tokens, total_tokens)
-        
-        try:
-            await response.write_eof()
-        except Exception:
-            pass
+            try:
+                await response.write_eof()
+            except Exception:
+                pass
     
     return response
 

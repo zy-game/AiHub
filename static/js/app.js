@@ -37,7 +37,17 @@ const API = {
             return;
         }
         
-        return resp.json();
+        // Check if response has content
+        const text = await resp.text();
+        if (!text) {
+            throw new Error('服务器返回空响应');
+        }
+        
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            throw new Error('服务器返回无效的JSON: ' + text);
+        }
     },
     get: (url) => API.request('GET', url),
     post: (url, data, ct) => API.request('POST', url, data, ct),
@@ -154,6 +164,20 @@ async function loadDashboard() {
     document.getElementById('stat-tokens').textContent = formatTokens((o.total_input_tokens||0) + (o.total_output_tokens||0));
     document.getElementById('stat-duration').textContent = o.avg_duration ? `${Math.round(o.avg_duration)}ms` : '-';
     document.getElementById('stat-errors').textContent = o.total_requests ? `${((o.error_count||0)/o.total_requests*100).toFixed(1)}%` : '0%';
+    
+    // Display quota usage
+    if (currentUser) {
+        const quota = currentUser.quota || 0;
+        const usedQuota = currentUser.used_quota || 0;
+        if (quota === -1) {
+            document.getElementById('stat-quota').textContent = '无限制';
+        } else {
+            const percentage = quota > 0 ? Math.round((usedQuota / quota) * 100) : 0;
+            document.getElementById('stat-quota').textContent = `${formatTokens(usedQuota)} / ${formatTokens(quota)} (${percentage}%)`;
+        }
+    } else {
+        document.getElementById('stat-quota').textContent = '-';
+    }
     
     // Load risk control status for super_admin
     if (window.userRole === 'super_admin') {
@@ -492,25 +516,67 @@ async function loadChannelModels(channelId) {
         const allModels = data.all_models || [];
         const enabledModels = data.enabled_models || [];
         
+        // Create add model button
+        const addButton = `
+            <div class="add-model-btn" onclick="showAddModelDialog('${channelId}')">
+                <span class="add-icon">+</span>
+                <span>添加模型</span>
+            </div>
+        `;
+        
         if (allModels.length === 0) {
-            container.innerHTML = '<small class="help-text">此渠道没有可用模型</small>';
+            container.innerHTML = addButton + '<small class="help-text">此渠道没有可用模型</small>';
             return;
         }
         
         // Create checkboxes for each model
-        container.innerHTML = allModels.map(model => {
+        const modelCheckboxes = allModels.map(model => {
             const isChecked = enabledModels.length === 0 || enabledModels.includes(model);
             return `
                 <div class="model-checkbox-item${isChecked ? ' selected' : ''}" onclick="toggleModelCheckbox(this)">
                     <input type="checkbox" id="model-${channelId}-${model}" 
                            value="${model}" ${isChecked ? 'checked' : ''}>
                     <label for="model-${channelId}-${model}">${model}</label>
+                    <button class="delete-model-btn" onclick="event.stopPropagation(); deleteModel('${channelId}', '${model}')" title="删除模型">×</button>
                 </div>
             `;
         }).join('');
+        
+        container.innerHTML = addButton + modelCheckboxes;
     } catch (err) {
         console.error('Failed to load models:', err);
         container.innerHTML = '<small class="help-text text-error">加载失败</small>';
+    }
+}
+
+function showAddModelDialog(channelId) {
+    const modelName = prompt('请输入要添加的模型名称：');
+    if (modelName && modelName.trim()) {
+        addModelToChannel(channelId, modelName.trim());
+    }
+}
+
+async function addModelToChannel(channelId, modelName) {
+    try {
+        await API.post(`/api/providers/${channelId}/models`, { model_name: modelName });
+        alert('模型添加成功');
+        await loadChannelModels(channelId);
+    } catch (err) {
+        alert('添加失败：' + err.message);
+    }
+}
+
+async function deleteModel(channelId, modelName) {
+    if (!confirm(`确定要删除模型 "${modelName}" 吗？`)) {
+        return;
+    }
+    
+    try {
+        await API.delete(`/api/providers/${channelId}/models/${encodeURIComponent(modelName)}`);
+        alert('模型删除成功');
+        await loadChannelModels(channelId);
+    } catch (err) {
+        alert('删除失败：' + err.message);
     }
 }
 
@@ -703,11 +769,12 @@ document.getElementById('account-form').addEventListener('submit', async e => {
     
     if (channelGroup.style.display !== 'none') {
         // Adding from all accounts page, use selected channel
-        targetChannelId = parseInt(document.getElementById('account-channel-select').value);
-        if (!targetChannelId) {
+        const selectedValue = document.getElementById('account-channel-select').value;
+        if (!selectedValue || selectedValue === '') {
             alert('请选择渠道');
             return;
         }
+        targetChannelId = selectedValue;
     }
     
     await API.post(`/api/channels/${targetChannelId}/accounts`, {
@@ -1019,21 +1086,59 @@ async function pollKiroLogin(deviceCode, clientId, clientSecret, interval) {
 
 document.getElementById('import-form').addEventListener('submit', async e => {
     e.preventDefault();
-    let result;
-    if (currentChannelType === 'kiro') {
-        const file = document.getElementById('import-file')?.files[0];
-        const json = document.getElementById('import-kiro-json')?.value.trim();
-        if (file) { try { result = await API.post(`/api/channels/${currentChannelId}/accounts/import`, JSON.parse(await file.text())); } catch { alert('无效的 JSON 文件'); return; } }
-        else if (json) { try { result = await API.post(`/api/channels/${currentChannelId}/accounts/import`, JSON.parse(json)); } catch { alert('无效的 JSON 格式'); return; } }
-        else { alert('请上传文件或粘贴 JSON'); return; }
-    } else {
-        const keys = document.getElementById('import-keys').value.trim();
-        if (!keys) { alert('请输入 API Keys'); return; }
-        result = await API.post(`/api/channels/${currentChannelId}/accounts/import`, keys, 'text/plain');
+    
+    // Check if we need to get channel from selector (when importing from all accounts page)
+    const channelGroup = document.getElementById('import-channel-group');
+    let targetChannelId = currentChannelId;
+    
+    if (channelGroup && channelGroup.style.display !== 'none') {
+        const selectedValue = document.getElementById('import-channel-select').value;
+        if (!selectedValue || selectedValue === '') {
+            alert('请选择渠道');
+            return;
+        }
+        targetChannelId = selectedValue;
     }
-    alert(`已导入 ${result.imported} 个账号`);
-    closeModal('import-modal');
-    loadAccounts();
+    
+    if (!targetChannelId) {
+        alert('请选择渠道');
+        return;
+    }
+    
+    let result;
+    try {
+        if (currentChannelType === 'kiro') {
+            const file = document.getElementById('import-file')?.files[0];
+            const json = document.getElementById('import-kiro-json')?.value.trim();
+            if (file) {
+                result = await API.post(`/api/channels/${targetChannelId}/accounts/import`, JSON.parse(await file.text()));
+            } else if (json) {
+                result = await API.post(`/api/channels/${targetChannelId}/accounts/import`, JSON.parse(json));
+            } else {
+                alert('请上传文件或粘贴 JSON');
+                return;
+            }
+        } else {
+            const keys = document.getElementById('import-keys').value.trim();
+            if (!keys) {
+                alert('请输入 API Keys');
+                return;
+            }
+            result = await API.post(`/api/channels/${targetChannelId}/accounts/import`, keys, 'text/plain');
+        }
+        
+        alert(`已导入 ${result.imported || 0} 个账号`);
+        closeModal('import-modal');
+        
+        // Reload appropriate page
+        if (channelGroup && channelGroup.style.display !== 'none') {
+            loadAccountsAll();
+        } else {
+            loadAccounts();
+        }
+    } catch (err) {
+        alert('导入失败：' + (err.message || '无效的格式'));
+    }
 });
 
 // Modal
@@ -1621,6 +1726,7 @@ async function saveRiskConfig() {
 }
 
 // Init
-loadCurrentUser().then(() => {
+(async function() {
+    await loadCurrentUser();
     loadDashboard();
-});
+})();

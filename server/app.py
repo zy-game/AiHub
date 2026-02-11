@@ -12,7 +12,8 @@ from server.api_providers import (
     api_list_providers, api_get_provider, api_update_provider_config, api_provider_models,
     api_list_provider_accounts, api_create_provider_account, api_batch_import_provider_accounts, api_clear_provider_accounts,
     api_refresh_provider_usage, api_refresh_all_providers_usage,
-    api_kiro_device_auth, api_kiro_device_token
+    api_kiro_device_auth, api_kiro_device_token,
+    api_add_provider_model, api_remove_provider_model
 )
 # Import authentication API
 from server.api_auth import (
@@ -45,8 +46,10 @@ async def on_startup(app: web.Application):
     await init_auth_system()  # Initialize super admin and invite code
     logger.info("Authentication system initialized")
     
-    # Load provider configurations from database
-    from providers import load_provider_configs_from_db
+    # Initialize providers and load configurations from database
+    from providers import load_provider_configs_from_db, initialize_providers_async
+    await initialize_providers_async()
+    logger.info("Providers initialized with models from database")
     await load_provider_configs_from_db()
     logger.info("Provider configurations loaded")
     
@@ -108,6 +111,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/providers/{type}", api_get_provider)
     app.router.add_put("/api/providers/{type}/config", api_update_provider_config)
     app.router.add_get("/api/providers/{type}/models", api_provider_models)
+    app.router.add_post("/api/providers/{type}/models", api_add_provider_model)
+    app.router.add_delete("/api/providers/{type}/models/{model}", api_remove_provider_model)
     
     # Admin API routes - Accounts (per provider) (NEW)
     app.router.add_get("/api/providers/{type}/accounts", api_list_provider_accounts)

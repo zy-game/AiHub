@@ -89,6 +89,50 @@ async def load_all_provider_configs():
         rows = await cursor.fetchall()
         return {row[0]: {'priority': row[1], 'weight': row[2], 'enabled': row[3], 'enabled_models': row[4]} for row in rows}
 
+async def save_provider_models(provider_type: str, models: list):
+    """Save provider supported models to database"""
+    db = await get_db()
+    
+    # Delete existing models for this provider
+    await db.execute("DELETE FROM provider_models WHERE provider_type = ?", (provider_type,))
+    
+    # Insert new models
+    for model in models:
+        await db.execute(
+            "INSERT OR IGNORE INTO provider_models (provider_type, model_name) VALUES (?, ?)",
+            (provider_type, model)
+        )
+    
+    await db.commit()
+
+async def load_provider_models(provider_type: str):
+    """Load provider supported models from database"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT model_name FROM provider_models WHERE provider_type = ? ORDER BY model_name",
+        (provider_type,)
+    ) as cursor:
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
+async def add_provider_model(provider_type: str, model_name: str):
+    """Add a single model to provider's supported models"""
+    db = await get_db()
+    await db.execute(
+        "INSERT OR IGNORE INTO provider_models (provider_type, model_name) VALUES (?, ?)",
+        (provider_type, model_name)
+    )
+    await db.commit()
+
+async def remove_provider_model(provider_type: str, model_name: str):
+    """Remove a model from provider's supported models"""
+    db = await get_db()
+    await db.execute(
+        "DELETE FROM provider_models WHERE provider_type = ? AND model_name = ?",
+        (provider_type, model_name)
+    )
+    await db.commit()
+
 async def init_tables(db: aiosqlite.Connection):
     # Check if channels table exists (old schema)
     async with db.execute(
@@ -136,6 +180,16 @@ async def init_tables(db: aiosqlite.Connection):
             enabled_models TEXT DEFAULT '',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        
+        CREATE TABLE IF NOT EXISTS provider_models (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_type TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(provider_type, model_name)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_type);
         
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

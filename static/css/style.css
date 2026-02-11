@@ -993,3 +993,97 @@ td a:hover {
     color: white;
     font-weight: 500;
 }
+
+.add-model-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: var(--bg-tertiary);
+    border: 1px dashed var(--border-color);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-right: 8px;
+    margin-bottom: 8px;
+}
+
+.add-model-btn:hover {
+    border-color: var(--primary);
+    background: var(--primary-light);
+    color: var(--primary);
+}
+
+.add-model-btn .add-icon {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.model-checkbox-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-right: 8px;
+    margin-bottom: 8px;
+    position: relative;
+}
+
+.model-checkbox-item:hover {
+    border-color: var(--primary);
+}
+
+.model-checkbox-item input[type="checkbox"] {
+    display: none;
+}
+
+.model-checkbox-item label {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    user-select: none;
+}
+
+.model-checkbox-item.selected {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+.model-checkbox-item.selected label {
+    color: white;
+    font-weight: 500;
+}
+
+.delete-model-btn {
+    display: none;
+    background: rgba(239, 68, 68, 0.9);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 4px;
+    transition: all 0.2s;
+}
+
+.model-checkbox-item:hover .delete-model-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.delete-model-btn:hover {
+    background: rgba(239, 68, 68, 1);
+    transform: scale(1.1);
+}

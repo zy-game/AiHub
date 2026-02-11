@@ -10,6 +10,8 @@ class OpenAIConverter(BaseConverter):
     def convert_request(self, data: dict, target_format: str) -> dict:
         if target_format == "openai":
             return data
+        elif target_format == "glm":
+            return self._to_glm_request(data)
         elif target_format == "claude":
             return self._to_claude_request(data)
         elif target_format == "gemini":
@@ -28,6 +30,8 @@ class OpenAIConverter(BaseConverter):
     def convert_stream_chunk(self, chunk: str, source_format: str) -> str:
         if source_format == "openai":
             return chunk
+        elif source_format == "glm":
+            return self._from_glm_stream(chunk)
         elif source_format == "claude":
             return self._from_claude_stream(chunk)
         elif source_format == "gemini":
@@ -89,6 +93,42 @@ class OpenAIConverter(BaseConverter):
                     "input_schema": func.get("parameters", {})
                 })
         return claude_tools
+    
+    def _to_glm_request(self, data: dict) -> dict:
+        """Convert OpenAI format to GLM format"""
+        result = data.copy()
+        
+        # Ensure tools have the correct format for GLM
+        # GLM requires: {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+        if "tools" in result and result["tools"]:
+            formatted_tools = []
+            for tool in result["tools"]:
+                if not isinstance(tool, dict):
+                    continue
+                
+                # OpenAI format: {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+                # This is already the correct format for GLM
+                if tool.get("type") == "function" and "function" in tool:
+                    func = tool["function"]
+                    # Ensure function has required fields
+                    if "name" in func and "description" in func and "parameters" in func:
+                        formatted_tools.append(tool)
+                    elif "name" in func and "parameters" in func:
+                        # Add default description if missing
+                        formatted_tools.append({
+                            "type": "function",
+                            "function": {
+                                "name": func["name"],
+                                "description": func.get("description", func["name"]),
+                                "parameters": func["parameters"]
+                            }
+                        })
+            
+            result["tools"] = formatted_tools if formatted_tools else None
+            if not result["tools"]:
+                del result["tools"]
+        
+        return result
     
     def _to_gemini_request(self, data: dict) -> dict:
         messages = data.get("messages", [])
@@ -208,6 +248,75 @@ class OpenAIConverter(BaseConverter):
                 return "data: [DONE]\n\n"
         except:
             pass
+        return ""
+    
+    def _from_glm_stream(self, chunk: str) -> str:
+        """Convert GLM stream format to OpenAI stream format"""
+        # Handle both with and without "data: " prefix
+        if chunk.startswith("data: "):
+            data_str = chunk[6:].strip()
+        else:
+            data_str = chunk.strip()
+        
+        if not data_str:
+            return ""
+        
+        if data_str == "[DONE]":
+            return "data: [DONE]\n\n"
+        
+        try:
+            data = json.loads(data_str)
+            
+            # GLM format is already OpenAI-compatible, but may have reasoning_content
+            # We need to merge reasoning_content and content
+            choices = data.get("choices", [])
+            if choices:
+                delta = choices[0].get("delta", {})
+                
+                # Combine reasoning_content and content
+                combined_content = ""
+                if "reasoning_content" in delta and delta["reasoning_content"]:
+                    combined_content += delta["reasoning_content"]
+                if "content" in delta and delta["content"]:
+                    combined_content += delta["content"]
+                
+                # Build OpenAI format response
+                if combined_content or "tool_calls" in delta or choices[0].get("finish_reason"):
+                    openai_chunk = {
+                        "id": data.get("id", "chatcmpl-stream"),
+                        "object": "chat.completion.chunk",
+                        "created": data.get("created", int(time.time())),
+                        "model": data.get("model", ""),
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": choices[0].get("finish_reason")
+                        }]
+                    }
+                    
+                    # Add content if present
+                    if combined_content:
+                        openai_chunk["choices"][0]["delta"]["content"] = combined_content
+                    
+                    # Add role if present (only in first chunk)
+                    if "role" in delta and not combined_content:
+                        openai_chunk["choices"][0]["delta"]["role"] = delta["role"]
+                    
+                    # Add tool_calls if present
+                    if "tool_calls" in delta:
+                        openai_chunk["choices"][0]["delta"]["tool_calls"] = delta["tool_calls"]
+                    
+                    # Add usage if present (last chunk)
+                    if "usage" in data:
+                        openai_chunk["usage"] = data["usage"]
+                    
+                    return f'data: {json.dumps(openai_chunk)}\n\n'
+        except Exception as e:
+            # Log parsing errors for debugging
+            import sys
+            print(f"GLM stream conversion error: {e}, chunk: {chunk[:100]}", file=sys.stderr)
+            return ""
+        
         return ""
     
     def _from_gemini_stream(self, chunk: str) -> str:

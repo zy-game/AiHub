@@ -10,6 +10,8 @@ class ClaudeConverter(BaseConverter):
     def convert_request(self, data: dict, target_format: str) -> dict:
         if target_format == "claude":
             return data
+        elif target_format == "glm":
+            return self._to_glm_request(data)
         elif target_format == "openai":
             return self._to_openai_request(data)
         elif target_format == "gemini":
@@ -92,6 +94,67 @@ class ClaudeConverter(BaseConverter):
                 }
             })
         return openai_tools
+    
+    def _to_glm_request(self, data: dict) -> dict:
+        """Convert Claude format to GLM format"""
+        result = {}
+        
+        # Convert messages
+        messages = []
+        if data.get("system"):
+            system = data["system"]
+            if isinstance(system, str):
+                messages.append({"role": "system", "content": system})
+            elif isinstance(system, list):
+                text = " ".join(b.get("text", "") for b in system if b.get("type") == "text")
+                messages.append({"role": "system", "content": text})
+        
+        for msg in data.get("messages", []):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            if isinstance(content, str):
+                messages.append({"role": role, "content": content})
+            elif isinstance(content, list):
+                # Extract text from content blocks
+                text_parts = []
+                for block in content:
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                if text_parts:
+                    messages.append({"role": role, "content": "\n".join(text_parts)})
+        
+        result["messages"] = messages
+        
+        # Convert tools from Claude format to GLM format
+        # Claude: [{"name": "...", "description": "...", "input_schema": {...}}]
+        # GLM: [{"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}]
+        if data.get("tools"):
+            glm_tools = []
+            for tool in data["tools"]:
+                if isinstance(tool, dict) and "name" in tool:
+                    glm_tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool["name"],
+                            "description": tool.get("description", tool["name"]),
+                            "parameters": tool.get("input_schema", {})
+                        }
+                    })
+            if glm_tools:
+                result["tools"] = glm_tools
+        
+        # Copy other parameters
+        if data.get("max_tokens"):
+            result["max_tokens"] = data["max_tokens"]
+        if data.get("temperature") is not None:
+            result["temperature"] = data["temperature"]
+        if data.get("top_p") is not None:
+            result["top_p"] = data["top_p"]
+        if data.get("stream") is not None:
+            result["stream"] = data["stream"]
+        
+        return result
     
     def _to_gemini_request(self, data: dict) -> dict:
         contents = []

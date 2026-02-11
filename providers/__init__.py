@@ -7,6 +7,7 @@ from .openai import OpenAIProvider
 from .anthropic import AnthropicProvider
 from .google import GoogleProvider
 from .kiro import KiroProvider
+from .glm import GLMProvider
 
 # Global provider registry
 _PROVIDERS: Dict[str, BaseProvider] = {}
@@ -40,6 +41,15 @@ def initialize_providers():
     global _PROVIDERS
     _PROVIDERS = discover_providers()
     print(f"Discovered {len(_PROVIDERS)} providers: {list(_PROVIDERS.keys())}")
+
+async def initialize_providers_async():
+    """Initialize providers asynchronously (load models from database)"""
+    for provider in _PROVIDERS.values():
+        try:
+            await provider.initialize()
+        except Exception as e:
+            print(f"Warning: Failed to initialize provider {provider.name}: {e}")
+    print(f"Initialized {len(_PROVIDERS)} providers with models from database")
 
 def get_provider(provider_type: str) -> Optional[BaseProvider]:
     """Get a provider by type name"""

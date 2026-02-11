@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional, Tuple, Dict
+from typing import AsyncIterator, Optional, Tuple, Dict, List
 import aiohttp
 import time
 import asyncio
@@ -12,16 +12,41 @@ class BaseProvider(ABC):
     DEFAULT_WEIGHT = 1
     DEFAULT_ENABLED = True
     
+    # Default supported models (to be overridden by subclasses)
+    DEFAULT_SUPPORTED_MODELS = []
+    
     def __init__(self, name: str):
         self.name = name
         self.priority = self.DEFAULT_PRIORITY
         self.weight = self.DEFAULT_WEIGHT
         self.enabled = self.DEFAULT_ENABLED
         self.enabled_models = []  # Empty means all models are enabled
+        self._supported_models = []  # Will be loaded from DB or use default
         # Statistics (runtime only, not persisted)
         self.avg_response_time = 0
         self.total_requests = 0
         self.failed_requests = 0
+    
+    async def initialize(self):
+        """Initialize provider, load models from database"""
+        from models.database import load_provider_models, save_provider_models
+        
+        # Try to load models from database
+        db_models = await load_provider_models(self.name)
+        
+        if db_models:
+            # Use models from database
+            self._supported_models = db_models
+        else:
+            # No models in database, use default and save to DB
+            default_models = self.get_default_supported_models()
+            if default_models:
+                self._supported_models = default_models
+                await save_provider_models(self.name, default_models)
+    
+    def get_default_supported_models(self) -> List[str]:
+        """Get default supported models (to be overridden by subclasses)"""
+        return self.DEFAULT_SUPPORTED_MODELS.copy() if self.DEFAULT_SUPPORTED_MODELS else []
     
     def configure(self, priority=None, weight=None, enabled=None, enabled_models=None):
         """Configure provider settings from config file or database"""
@@ -198,9 +223,12 @@ class BaseProvider(ABC):
         Args:
             api_key: API密钥
             model: 模型名称
-            data: 请求数据
+            data: 请求数据（包含stream参数）
             account_id: 账号ID（用于代理绑定、指纹、健康监控）
             user_id: 用户ID（用于速率限制）
+            
+        Yields:
+            bytes: 如果stream=True，返回SSE格式的chunk；如果stream=False，返回完整JSON的bytes
         """
         pass
     
@@ -210,8 +238,8 @@ class BaseProvider(ABC):
         pass
     
     def get_supported_models(self) -> list:
-        """Get statically defined supported models (no API call needed)"""
-        return []
+        """Get supported models from database or default"""
+        return self._supported_models if self._supported_models else self.get_default_supported_models()
     
     def get_all_models(self) -> list:
         """Get all available models (before filtering by enabled_models)"""

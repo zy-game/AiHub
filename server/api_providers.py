@@ -127,11 +127,55 @@ async def api_provider_models(request: web.Request) -> web.Response:
     if not provider:
         return web.json_response({"error": "Provider not found"}, status=404)
     
-    models = provider.get_supported_models()
+    return web.json_response({
+        "provider": provider_type,
+        "models": provider.get_supported_models()
+    })
+
+async def api_add_provider_model(request: web.Request) -> web.Response:
+    """Add a model to provider's supported models"""
+    provider_type = request.match_info["type"]
+    data = await request.json()
+    model_name = data.get("model_name")
+    
+    if not model_name:
+        return web.json_response({"error": "model_name is required"}, status=400)
+    
+    provider = get_provider(provider_type)
+    if not provider:
+        return web.json_response({"error": "Provider not found"}, status=404)
+    
+    # Add to database
+    from models.database import add_provider_model
+    await add_provider_model(provider_type, model_name)
+    
+    # Reload provider models
+    await provider.initialize()
     
     return web.json_response({
-        "provider_type": provider.name,
-        "supported_models": models
+        "success": True,
+        "models": provider.get_supported_models()
+    })
+
+async def api_remove_provider_model(request: web.Request) -> web.Response:
+    """Remove a model from provider's supported models"""
+    provider_type = request.match_info["type"]
+    model_name = request.match_info["model"]
+    
+    provider = get_provider(provider_type)
+    if not provider:
+        return web.json_response({"error": "Provider not found"}, status=404)
+    
+    # Remove from database
+    from models.database import remove_provider_model
+    await remove_provider_model(provider_type, model_name)
+    
+    # Reload provider models
+    await provider.initialize()
+    
+    return web.json_response({
+        "success": True,
+        "models": provider.get_supported_models()
     })
 
 # Account API for Providers

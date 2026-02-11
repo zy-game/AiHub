@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+from math import fabs
 import uuid
 import httpx
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from utils.converters import (
     convert_anthropic_tools_to_kiro,
     KiroStreamConverter
 )
+from .converters import KiroConverter
 
 class KiroProvider(BaseProvider):
     
