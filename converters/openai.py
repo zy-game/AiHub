@@ -100,6 +100,10 @@ class OpenAIToClaudeConverter:
                 self.input_tokens = usage.get("prompt_tokens", 0)
                 self.output_tokens = usage.get("completion_tokens", self.output_tokens)
             
+            # Extract cache information from usage
+            prompt_tokens_details = usage.get("prompt_tokens_details", {})
+            cache_read_tokens = prompt_tokens_details.get("cached_tokens", 0)
+            
             stop_reason_map = {
                 "stop": "end_turn",
                 "length": "max_tokens",
@@ -116,7 +120,7 @@ class OpenAIToClaudeConverter:
                     "input_tokens": self.input_tokens,
                     "output_tokens": self.output_tokens,
                     "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0
+                    "cache_read_input_tokens": cache_read_tokens
                 }
             }
             result += f'event: message_delta\ndata: {json.dumps(message_delta)}\n\n'

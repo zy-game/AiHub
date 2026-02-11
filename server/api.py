@@ -12,7 +12,8 @@ from models import (
     delete_accounts_by_channel, delete_accounts_by_provider,
     get_account_usage_totals,
     get_all_users, create_user, update_user, delete_user,
-    get_logs, get_stats, get_model_stats, get_channel_token_usage, get_user_token_usage, get_hourly_stats, get_channel_stats, get_top_users
+    get_logs, get_stats, get_model_stats, get_channel_token_usage, get_user_token_usage, get_hourly_stats, get_channel_stats, get_top_users,
+    get_cache_config, update_cache_config
 )
 from providers import get_provider
 from utils.logger import logger
@@ -698,3 +699,15 @@ async def api_health_check_all(request: web.Request) -> web.Response:
         "message": "Health check started",
         "status": "running"
     })
+
+# Cache Config API
+async def api_get_cache_config(request: web.Request) -> web.Response:
+    """Get cache configuration"""
+    config = await get_cache_config()
+    return web.json_response(config)
+
+async def api_update_cache_config(request: web.Request) -> web.Response:
+    """Update cache configuration"""
+    data = await request.json()
+    await update_cache_config(data)
+    return web.json_response({"message": "Cache config updated"})

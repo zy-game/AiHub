@@ -28,7 +28,8 @@ from server.api import (
     api_list_tokens, api_create_token, api_update_token, api_delete_token, api_token_stats, api_model_pricing,
     api_list_logs, api_get_stats,
     api_refresh_account_usage,
-    api_health_check_all, api_health_check_channel
+    api_health_check_all, api_health_check_channel,
+    api_get_cache_config, api_update_cache_config
 )
 from server.api_risk_control import (
     api_risk_control_status, api_proxy_pool_stats, api_add_proxy, api_proxy_health_check,
@@ -180,6 +181,10 @@ def create_app() -> web.Application:
     app.router.add_post("/api/risk-control/accounts/{id}/ban", api_account_manual_ban)
     app.router.add_post("/api/risk-control/accounts/{id}/recover", api_account_recover)
     app.router.add_post("/api/risk-control/config", api_update_risk_control_config)
+    
+    # Cache Config API routes (NEW)
+    app.router.add_get("/api/cache-config", api_get_cache_config)
+    app.router.add_post("/api/cache-config", api_update_cache_config)
     
     # Static files path (must be defined before use)
     # __file__ is server/app.py, so we need to go up two levels to get to project root

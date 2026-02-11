@@ -397,6 +397,9 @@ class KiroStreamConverter:
         self.current_tool_call = None
         self.total_content = ""
         self.last_content_event = None
+        # Cache token tracking
+        self.cache_creation_tokens = 0
+        self.cache_read_tokens = 0
     
     def ensure_block_start(self, block_type: str) -> list:
         """Ensure a content block is started and return start events"""

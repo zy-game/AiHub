@@ -71,31 +71,67 @@ def get_model_rate(model: str) -> dict:
     return MODEL_RATES["default"]
 
 
-def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> dict:
+def calculate_cost(model: str, input_tokens: int, output_tokens: int, 
+                   cache_read_tokens: int = 0, cache_creation_tokens: int = 0,
+                   provider_type: str = None) -> dict:
     """
-    Calculate cost for a request
+    Calculate cost for a request (with cache support)
     
     Args:
         model: Model name
-        input_tokens: Number of input tokens
+        input_tokens: Number of input tokens (non-cached)
         output_tokens: Number of output tokens
+        cache_read_tokens: Number of cached tokens read
+        cache_creation_tokens: Number of tokens used for cache creation
+        provider_type: Provider type for cache ratio lookup
     
     Returns:
         Dict with cost breakdown
     """
+    from utils.cache_handler import get_cache_handler
+    
     rate = get_model_rate(model)
     
-    # Calculate costs (per 1000 tokens)
+    # Calculate base costs (per 1000 tokens)
     input_cost = (input_tokens / 1000) * rate["input"]
     output_cost = (output_tokens / 1000) * rate["output"]
-    total_cost = input_cost + output_cost
+    
+    # Calculate cache costs if applicable
+    cache_read_cost = 0
+    cache_creation_cost = 0
+    cache_savings = 0
+    
+    if cache_read_tokens > 0 or cache_creation_tokens > 0:
+        cache_handler = get_cache_handler()
+        
+        # Get cache ratios for this provider
+        if provider_type:
+            ratios = cache_handler.CACHE_RATIOS.get(provider_type, {
+                "cache_read": 1.0,
+                "cache_creation": 1.0
+            })
+        else:
+            ratios = {"cache_read": 1.0, "cache_creation": 1.0}
+        
+        # Calculate cache costs
+        cache_read_cost = (cache_read_tokens / 1000) * rate["input"] * ratios["cache_read"]
+        cache_creation_cost = (cache_creation_tokens / 1000) * rate["input"] * ratios["cache_creation"]
+        
+        # Calculate savings (what we would have paid without cache)
+        cache_savings = (cache_read_tokens / 1000) * rate["input"] * (1 - ratios["cache_read"])
+    
+    total_cost = input_cost + output_cost + cache_read_cost + cache_creation_cost
     
     # Calculate quota usage (based on ratio)
-    quota_usage = int((input_tokens + output_tokens) * rate["ratio"])
+    total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens
+    quota_usage = int(total_tokens * rate["ratio"])
     
     return {
         "input_cost": round(input_cost, 6),
         "output_cost": round(output_cost, 6),
+        "cache_read_cost": round(cache_read_cost, 6),
+        "cache_creation_cost": round(cache_creation_cost, 6),
+        "cache_savings": round(cache_savings, 6),
         "total_cost": round(total_cost, 6),
         "quota_usage": quota_usage,
         "ratio": rate["ratio"]

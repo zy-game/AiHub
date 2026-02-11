@@ -13,3 +13,4 @@ from .account import (
 from .user import User, get_user_by_api_key, get_user_by_id, get_all_users, create_user, update_user, delete_user, update_user_quota, add_user_tokens
 from .token import Token, get_token_by_key, get_all_tokens, create_token, update_token, delete_token, add_token_usage, check_and_update_token_status
 from .log import create_log, get_logs, get_stats, get_model_stats, get_channel_token_usage, get_user_token_usage, get_hourly_stats, get_channel_stats, get_top_users
+from .cache_config import get_cache_config, update_cache_config

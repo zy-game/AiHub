@@ -231,9 +231,16 @@ async def init_tables(db: aiosqlite.Connection):
             model TEXT,
             input_tokens INTEGER DEFAULT 0,
             output_tokens INTEGER DEFAULT 0,
+            cache_read_tokens INTEGER DEFAULT 0,
+            cache_creation_tokens INTEGER DEFAULT 0,
+            context_compressed INTEGER DEFAULT 0,
+            original_tokens INTEGER DEFAULT 0,
+            compressed_tokens INTEGER DEFAULT 0,
             duration_ms INTEGER DEFAULT 0,
             status INTEGER DEFAULT 200,
             error TEXT,
+            prompt_cache_key TEXT,
+            provider_type TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
@@ -272,6 +279,23 @@ async def init_tables(db: aiosqlite.Connection):
         if "provider_type" not in column_names:
             await db.execute("ALTER TABLE logs ADD COLUMN provider_type TEXT")
     
+    # Add cache-related columns to logs table
+    async with db.execute("PRAGMA table_info(logs)") as cursor:
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        if "cache_read_tokens" not in column_names:
+            await db.execute("ALTER TABLE logs ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
+        if "cache_creation_tokens" not in column_names:
+            await db.execute("ALTER TABLE logs ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0")
+        if "prompt_cache_key" not in column_names:
+            await db.execute("ALTER TABLE logs ADD COLUMN prompt_cache_key TEXT")
+        if "context_compressed" not in column_names:
+            await db.execute("ALTER TABLE logs ADD COLUMN context_compressed INTEGER DEFAULT 0")
+        if "original_tokens" not in column_names:
+            await db.execute("ALTER TABLE logs ADD COLUMN original_tokens INTEGER DEFAULT 0")
+        if "compressed_tokens" not in column_names:
+            await db.execute("ALTER TABLE logs ADD COLUMN compressed_tokens INTEGER DEFAULT 0")
+    
     # Add created_by to accounts table if missing
     async with db.execute("PRAGMA table_info(accounts)") as cursor:
         columns = await cursor.fetchall()
@@ -299,6 +323,24 @@ async def init_tables(db: aiosqlite.Connection):
     # Insert default config if not exists
     await db.execute("""
         INSERT OR IGNORE INTO risk_control_config (id) VALUES (1)
+    """)
+    
+    # Create cache_config table
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS cache_config (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            prompt_cache_enabled INTEGER DEFAULT 1,
+            context_compression_enabled INTEGER DEFAULT 0,
+            context_compression_threshold INTEGER DEFAULT 8000,
+            context_compression_target INTEGER DEFAULT 4000,
+            context_compression_strategy TEXT DEFAULT 'sliding_window',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Insert default config if not exists
+    await db.execute("""
+        INSERT OR IGNORE INTO cache_config (id) VALUES (1)
     """)
     
     await db.commit()

@@ -145,6 +145,7 @@ function loadPageData(page) {
         tokens: loadTokens, 
         logs: loadLogs,
         profile: loadProfile,
+        'cache-config': loadCacheConfig,
         'risk-proxy-pool': loadRiskProxyPool,
         'risk-health-monitor': loadRiskHealthMonitor,
         'risk-rate-limit': loadRiskRateLimit,
@@ -164,6 +165,11 @@ async function loadDashboard() {
     document.getElementById('stat-tokens').textContent = formatTokens((o.total_input_tokens||0) + (o.total_output_tokens||0));
     document.getElementById('stat-duration').textContent = o.avg_duration ? `${Math.round(o.avg_duration)}ms` : '-';
     document.getElementById('stat-errors').textContent = o.total_requests ? `${((o.error_count||0)/o.total_requests*100).toFixed(1)}%` : '0%';
+    
+    // Display cache hit rate
+    const cacheHitRate = o.cache_hit_rate || 0;
+    const cacheReadTokens = o.total_cache_read_tokens || 0;
+    document.getElementById('stat-cache-hit').textContent = cacheReadTokens > 0 ? `${cacheHitRate}%` : '-';
     
     // Display quota usage
     if (currentUser) {
@@ -990,9 +996,13 @@ async function loadLogs(append = false) {
         <tr>
             <td>${formatDate(l.created_at)}</td>
             <td>${l.user_name || '-'}</td>
-            <td>${l.channel_name || '-'}</td>
+            <td>${l.provider_type || '-'}</td>
             <td>${l.model}</td>
-            <td>${formatTokens(l.input_tokens + l.output_tokens)}</td>
+            <td>${formatTokens(l.input_tokens || 0)}</td>
+            <td>${formatTokens(l.output_tokens || 0)}</td>
+            <td>${l.cache_read_tokens > 0 ? `<span style="color: #10b981;">${formatTokens(l.cache_read_tokens)}</span>` : '-'}</td>
+            <td>${l.cache_creation_tokens > 0 ? `<span style="color: #f59e0b;">${formatTokens(l.cache_creation_tokens)}</span>` : '-'}</td>
+            <td>${l.context_compressed ? `<span style="color: #3b82f6;" title="原始: ${formatTokens(l.original_tokens)} → 压缩: ${formatTokens(l.compressed_tokens)}">${formatTokens(l.original_tokens)} → ${formatTokens(l.compressed_tokens)}</span>` : '-'}</td>
             <td>${l.duration_ms}ms</td>
             <td>${l.status >= 400 ? getBadge('danger', l.status) : getBadge('success', l.status)}</td>
         </tr>
@@ -1464,7 +1474,7 @@ function applyPermissions(user) {
     
     // Show risk control menus for super_admin
     if (role === 'super_admin') {
-        const riskMenus = ['risk-proxy-menu', 'risk-health-menu', 'risk-rate-menu', 'risk-config-menu'];
+        const riskMenus = ['cache-config-menu', 'risk-proxy-menu', 'risk-health-menu', 'risk-rate-menu', 'risk-config-menu'];
         riskMenus.forEach(menuId => {
             const menu = document.getElementById(menuId);
             if (menu) {
@@ -1730,3 +1740,35 @@ async function saveRiskConfig() {
     await loadCurrentUser();
     loadDashboard();
 })();
+
+// Cache Config
+async function loadCacheConfig() {
+    try {
+        const config = await API.get('/api/cache-config');
+        document.getElementById('cache-prompt-enabled').checked = config.prompt_cache_enabled === 1;
+        document.getElementById('cache-compression-enabled').checked = config.context_compression_enabled === 1;
+        document.getElementById('cache-compression-threshold').value = config.context_compression_threshold || 8000;
+        document.getElementById('cache-compression-target').value = config.context_compression_target || 4000;
+        document.getElementById('cache-compression-strategy').value = config.context_compression_strategy || 'sliding_window';
+    } catch (err) {
+        console.error('Failed to load cache config:', err);
+        alert('加载缓存配置失败：' + err.message);
+    }
+}
+
+async function saveCacheConfig() {
+    const config = {
+        prompt_cache_enabled: document.getElementById('cache-prompt-enabled').checked ? 1 : 0,
+        context_compression_enabled: document.getElementById('cache-compression-enabled').checked ? 1 : 0,
+        context_compression_threshold: parseInt(document.getElementById('cache-compression-threshold').value),
+        context_compression_target: parseInt(document.getElementById('cache-compression-target').value),
+        context_compression_strategy: document.getElementById('cache-compression-strategy').value
+    };
+    
+    try {
+        await API.post('/api/cache-config', config);
+        alert('缓存配置已保存');
+    } catch (err) {
+        alert('保存失败：' + err.message);
+    }
+}

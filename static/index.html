@@ -23,6 +23,7 @@
             <li><a href="#" data-page="tokens">🔑 令牌</a></li>
             <li><a href="#" data-page="logs">📝 日志</a></li>
             <li><a href="#" data-page="profile">⚙️ 个人中心</a></li>
+            <li id="cache-config-menu" style="display:none;"><a href="#" data-page="cache-config">🗄️ 缓存配置</a></li>
             <li id="risk-proxy-menu" style="display:none;"><a href="#" data-page="risk-proxy-pool">🌐 代理池管理</a></li>
             <li id="risk-health-menu" style="display:none;"><a href="#" data-page="risk-health-monitor">💊 账号健康</a></li>
             <li id="risk-rate-menu" style="display:none;"><a href="#" data-page="risk-rate-limit">⏱️ 速率限制</a></li>
@@ -79,6 +80,7 @@
             <div class="stats-grid">
                 <div class="stat-card"><h3>总请求数</h3><p id="stat-requests">-</p></div>
                 <div class="stat-card"><h3>总Token数</h3><p id="stat-tokens">-</p></div>
+                <div class="stat-card"><h3>缓存命中率</h3><p id="stat-cache-hit">-</p></div>
                 <div class="stat-card"><h3>平均耗时</h3><p id="stat-duration">-</p></div>
                 <div class="stat-card"><h3>错误率</h3><p id="stat-errors">-</p></div>
                 <div class="stat-card"><h3>配额使用</h3><p id="stat-quota">-</p></div>
@@ -191,7 +193,7 @@
             <div class="table-container">
                 <table id="logs-table">
                     <thead>
-                        <tr><th>时间</th><th>用户</th><th>渠道</th><th>模型</th><th>Token数</th><th>耗时</th><th>状态</th></tr>
+                        <tr><th>时间</th><th>用户</th><th>Provider</th><th>模型</th><th>输入Token</th><th>输出Token</th><th>缓存读取</th><th>缓存创建</th><th>压缩</th><th>耗时</th><th>状态</th></tr>
                     </thead>
                     <tbody></tbody>
                 </table>
@@ -349,6 +351,55 @@
                             <input type="checkbox" id="edit-account-enabled">
                             <span>启用账号</span>
                         </label>
+                    </div>
+                </form>
+            </div>
+        </section>
+        
+        <!-- Cache Config -->
+        <section id="page-cache-config" class="page">
+            <div class="page-header">
+                <h1>🗄️ 缓存配置</h1>
+                <button class="btn btn-primary" onclick="saveCacheConfig()">保存配置</button>
+            </div>
+            <div class="form-container">
+                <form id="cache-config-form" onsubmit="event.preventDefault(); saveCacheConfig();">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="cache-prompt-enabled">
+                            <span>启用 Prompt Cache（提示词缓存）</span>
+                        </label>
+                        <small class="help-text">自动识别和利用 AI 提供商的缓存机制，降低重复提示词的成本（缓存读取价格为正常价格的 10-50%）</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="cache-compression-enabled">
+                            <span>启用 Context Compression（上下文压缩）</span>
+                        </label>
+                        <small class="help-text">自动压缩过长的对话历史，减少 token 使用</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>压缩触发阈值（Token 数）</label>
+                        <input type="number" id="cache-compression-threshold" min="1000" max="100000" step="1000">
+                        <small class="help-text">当对话历史超过此 token 数时触发压缩</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>压缩目标长度（Token 数）</label>
+                        <input type="number" id="cache-compression-target" min="500" max="50000" step="500">
+                        <small class="help-text">压缩后的目标 token 数</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>压缩策略</label>
+                        <select id="cache-compression-strategy">
+                            <option value="sliding_window">滑动窗口（保留最近消息）</option>
+                            <option value="summary">摘要压缩（使用 AI 总结）</option>
+                            <option value="hybrid">混合策略（总结旧消息+保留最近消息）</option>
+                        </select>
+                        <small class="help-text">选择上下文压缩的策略</small>
                     </div>
                 </form>
             </div>

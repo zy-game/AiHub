@@ -385,7 +385,31 @@ class KiroProvider(BaseProvider):
         tools = data.get("tools")
         thinking = data.get("thinking")
         
+        # Debug: log message structure before building request
+        logger.debug(f"Kiro chat - messages count: {len(messages)}, roles: {[m.get('role') for m in messages]}")
+        if messages:
+            logger.debug(f"Kiro chat - last message role: {messages[-1].get('role')}")
+            logger.debug(f"Kiro chat - first message role: {messages[0].get('role')}")
+        
         request_data = self._build_request(messages, model, system, tools, thinking)
+        
+        # Debug: log the actual request being sent
+        logger.debug(f"Kiro request_data keys: {list(request_data.keys())}")
+        if "conversationState" in request_data:
+            conv_state = request_data["conversationState"]
+            logger.debug(f"conversationState keys: {list(conv_state.keys())}")
+            if "history" in conv_state:
+                logger.debug(f"history length: {len(conv_state['history'])}")
+                if conv_state['history']:
+                    logger.debug(f"history first item keys: {list(conv_state['history'][0].keys())}")
+                    logger.debug(f"history last item keys: {list(conv_state['history'][-1].keys())}")
+            if "currentMessage" in conv_state:
+                curr_msg = conv_state["currentMessage"]
+                logger.debug(f"currentMessage keys: {list(curr_msg.keys())}")
+                if "userInputMessage" in curr_msg:
+                    user_input = curr_msg["userInputMessage"]
+                    logger.debug(f"userInputMessage keys: {list(user_input.keys())}")
+                    logger.debug(f"userInputMessage content length: {len(user_input.get('content', ''))}")
         
         if profile_arn:
             request_data["profileArn"] = profile_arn
@@ -428,9 +452,7 @@ class KiroProvider(BaseProvider):
                         "content": [],
                         "usage": {
                             "input_tokens": self._estimate_input_tokens(messages, system, tools, thinking),
-                            "output_tokens": 0,
-                            "cache_creation_input_tokens": 0,
-                            "cache_read_input_tokens": 0
+                            "output_tokens": 0
                         }
                     }
                 }
@@ -446,10 +468,10 @@ class KiroProvider(BaseProvider):
                 usage_delta = None
 
                 async for chunk in resp.aiter_bytes():
-                    buffer += chunk.decode("utf-8", errors="ignore")
+                    chunk_str = chunk.decode("utf-8", errors="ignore")
+                    buffer += chunk_str
                     events, remaining = converter.parse_aws_event_stream_buffer(buffer)
                     buffer = remaining
-
                     for event in events:
                         if event["type"] == "content" and event.get("data") is not None:
                             sse_events = converter.process_content_event(event["data"], thinking_requested)
@@ -492,7 +514,10 @@ class KiroProvider(BaseProvider):
                 message_delta = {
                     "type": "message_delta",
                     "delta": {"stop_reason": "tool_use" if tool_calls else "end_turn"},
-                    "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+                    "usage": {
+                        "input_tokens": input_tokens, 
+                        "output_tokens": output_tokens
+                    }
                 }
                 yield f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode("utf-8")
                 yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
