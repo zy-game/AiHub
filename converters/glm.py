@@ -3,11 +3,82 @@ import uuid
 import time
 from .base import BaseConverter
 
+
+class GLMStreamConverter:
+    """Convert GLM stream chunk to OpenAI SSE format"""
+    
+    @staticmethod
+    def convert_stream_chunk(glm_chunk: bytes) -> str:
+        """Convert GLM stream chunk to OpenAI SSE format"""
+        try:
+            chunk_str = glm_chunk.decode("utf-8", errors="ignore").strip()
+        except:
+            return ""
+        
+        if not chunk_str:
+            return ""
+        
+        if chunk_str.startswith("data: "):
+            data_str = chunk_str[6:].strip()
+        else:
+            data_str = chunk_str
+        
+        if data_str == "[DONE]":
+            return "data: [DONE]\n\n"
+        
+        try:
+            data = json.loads(data_str)
+        except:
+            return ""
+        
+        choices = data.get("choices", [])
+        if not choices:
+            return ""
+        
+        delta = choices[0].get("delta", {})
+        
+        combined_content = ""
+        if "reasoning_content" in delta and delta["reasoning_content"]:
+            combined_content += delta["reasoning_content"]
+        if "content" in delta and delta["content"]:
+            combined_content += delta["content"]
+        
+        if combined_content or "tool_calls" in delta or choices[0].get("finish_reason"):
+            openai_chunk = {
+                "id": data.get("id", "chatcmpl-stream"),
+                "object": "chat.completion.chunk",
+                "created": data.get("created", int(time.time())),
+                "model": data.get("model", ""),
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": choices[0].get("finish_reason")
+                }]
+            }
+            
+            if combined_content:
+                openai_chunk["choices"][0]["delta"]["content"] = combined_content
+            
+            if "role" in delta and not combined_content:
+                openai_chunk["choices"][0]["delta"]["role"] = delta["role"]
+            
+            if "tool_calls" in delta:
+                openai_chunk["choices"][0]["delta"]["tool_calls"] = delta["tool_calls"]
+            
+            if "usage" in data:
+                openai_chunk["usage"] = data["usage"]
+            
+            return f'data: {json.dumps(openai_chunk)}\n\n'
+        
+        return ""
+
+
 class GLMConverter(BaseConverter):
     def __init__(self):
         super().__init__("glm")
     
-    def _ensure_tools_format(self, tools: list) -> list:
+    @staticmethod
+    def _ensure_tools_format(tools: list) -> list:
         """Ensure tools have the correct format for GLM API"""
         formatted_tools = []
         for tool in tools:
@@ -27,6 +98,19 @@ class GLMConverter(BaseConverter):
                 else:
                     formatted_tools.append(formatted_tool)
         return formatted_tools
+    
+    @staticmethod
+    def convert_request_static(data: dict) -> dict:
+        """Static method to convert OpenAI request to GLM format"""
+        result = data.copy()
+        
+        if "tools" in result and result["tools"]:
+            formatted_tools = GLMConverter._ensure_tools_format(result["tools"])
+            result["tools"] = formatted_tools if formatted_tools else None
+            if not result["tools"]:
+                del result["tools"]
+        
+        return result
     
     def convert_request(self, data: dict, target_format: str) -> dict:
         if target_format == "glm":

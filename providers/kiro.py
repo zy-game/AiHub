@@ -10,12 +10,11 @@ from .base import BaseProvider
 from utils.logger import logger
 from utils.text import get_content_text
 from utils.token_counter import count_tokens, count_request_tokens
-from utils.converters import (
+from converters import (
     convert_anthropic_messages_to_kiro,
     convert_anthropic_tools_to_kiro,
     KiroStreamConverter
 )
-from .converters import KiroConverter
 
 class KiroProvider(BaseProvider):
     

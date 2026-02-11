@@ -1,6 +1,8 @@
 import logging
 import sys
 from pathlib import Path
+from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from config import LOG_LEVEL
 
 def setup_logger(name: str = "aihub") -> logging.Logger:
@@ -16,10 +18,13 @@ def setup_logger(name: str = "aihub") -> logging.Logger:
         ))
         logger.addHandler(console_handler)
         
-        # File handler
+        # File handler with daily rotation
         log_dir = Path(__file__).parent.parent / "logs"
         log_dir.mkdir(exist_ok=True)
-        file_handler = logging.FileHandler(log_dir / f"{name}.log", encoding='utf-8')
+        
+        # Use current date for log filename
+        log_filename = log_dir / f"log_{datetime.now().strftime('%Y_%m_%d')}.log"
+        file_handler = logging.FileHandler(log_filename, encoding='utf-8')
         file_handler.setFormatter(logging.Formatter(
             "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"

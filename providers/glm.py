@@ -4,7 +4,7 @@ import time
 import asyncio
 from typing import AsyncIterator
 from .base import BaseProvider
-from .converters import GLMConverter, OpenAIToClaudeConverter
+from converters import GLMConverter, GLMStreamConverter, OpenAIToClaudeConverter
 from utils.logger import logger
 
 class GLMProvider(BaseProvider):
@@ -54,7 +54,7 @@ class GLMProvider(BaseProvider):
         )
         
         # Convert OpenAI format to GLM format
-        glm_data = GLMConverter.convert_request(data)
+        glm_data = GLMConverter.convert_request_static(data)
         glm_data["model"] = model
         is_stream = data.get("stream", True)
         glm_data["stream"] = is_stream
@@ -116,7 +116,7 @@ class GLMProvider(BaseProvider):
                                 chunk_count += 1
                                 
                                 # Convert GLM format to OpenAI format, then to Claude format
-                                openai_chunk = GLMConverter.convert_stream_chunk(line)
+                                openai_chunk = GLMStreamConverter.convert_stream_chunk(line)
                                 if openai_chunk:
                                     logged_count += 1
                                     claude_chunk = claude_converter.convert_chunk(openai_chunk)
