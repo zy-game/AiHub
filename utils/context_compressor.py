@@ -291,7 +291,6 @@ class ContextCompressor:
             for msg in conversation_messages:
                 if msg == last_user_msg:
                     break
-                logger.info(msg)
                 history_to_summarize.append(msg)
             
             if not history_to_summarize:
